@@ -583,28 +583,21 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen> {
                   child: Stack(
                     alignment: Alignment.center,
                     children: [
-                      Container(
-                        width: 56,
-                        height: 56,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                            color: _statusFrame(contact.status),
-                            width: 2,
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.25),
-                              blurRadius: 4,
-                              offset: const Offset(0, 2),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Image.asset(_assetAvatarFrame, width: 64, height: 64),
+                      // Photo / placeholder behind the Aero frame
                       ClipRRect(
                         borderRadius: BorderRadius.circular(6),
-                        child: _contactAvatar(contact, width: 48, height: 48),
+                        child: _contactAvatar(contact, width: 56, height: 56),
+                      ),
+                      // Aero glass frame, recolored by status
+                      Positioned.fill(
+                        child: ColorFiltered(
+                          colorFilter: ColorFilter.mode(
+                            _statusFrame(contact.status).withValues(alpha: 0.72),
+                            BlendMode.srcATop,
+                          ),
+                          child: Image.asset(_assetAvatarFrame,
+                              fit: BoxFit.fill),
+                        ),
                       ),
                     ],
                   ),

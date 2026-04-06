@@ -1,59 +1,88 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../utils/presence_status.dart';
-import 'status_indicator.dart';
 
+/// WLM 2009-style avatar: photo (or placeholder) beneath the Aero glass frame,
+/// with the frame tinted by [status] via [ColorFilter].
 class AvatarWidget extends StatelessWidget {
   const AvatarWidget({
     super.key,
-    required this.initials,
     required this.status,
-    this.size = 48,
+    this.imagePath,
+    this.size = 38,
   });
 
-  final String initials;
   final PresenceStatus status;
+  final String? imagePath;
   final double size;
+
+  static const _assetFrame =
+      'assets/images/extracted/msgsres/carved_png_9812096.png';
+  static const _assetPlaceholder =
+      'assets/images/extracted/msgsres/carved_png_9801032.png';
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      clipBehavior: Clip.none,
-      children: [
-        Container(
-          width: size,
-          height: size,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: const LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Color(0xFFEAF8FF), Color(0xFFBFE7FF)],
-            ),
-            border: Border.all(
-              color: const Color(0xFFFFFFFF),
-              width: 2,
-            ),
-            boxShadow: const [
-              BoxShadow(color: Color(0x44000000), blurRadius: 8, offset: Offset(0, 4)),
-            ],
-          ),
-          alignment: Alignment.center,
-          child: Text(
-            initials,
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-              color: const Color(0xFF2A4E6F),
-              fontSize: size * 0.3,
+    final online = status != PresenceStatus.appearOffline;
+    final tint = _tintForStatus(status);
+
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Stack(clipBehavior: Clip.none, children: [
+        // Photo / placeholder layer
+        Positioned.fill(
+          child: Opacity(
+            opacity: online ? 1.0 : 0.45,
+            child: Padding(
+              padding: EdgeInsets.all(size * 0.08),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(size * 0.05),
+                child: _buildPhoto(),
+              ),
             ),
           ),
         ),
-        Positioned(
-          right: -2,
-          bottom: -2,
-          child: StatusIndicator(status: status, size: size * 0.28),
+        // Aero glass frame, recolored by status
+        Positioned.fill(
+          child: ColorFiltered(
+            colorFilter: ColorFilter.mode(
+              tint.withValues(alpha: 0.72),
+              BlendMode.srcATop,
+            ),
+            child: Opacity(
+              opacity: online ? 1.0 : 0.7,
+              child: Image.asset(_assetFrame, fit: BoxFit.fill),
+            ),
+          ),
         ),
-      ],
+      ]),
     );
+  }
+
+  Widget _buildPhoto() {
+    final path = imagePath;
+    if (path != null && path.isNotEmpty) {
+      final file = File(path);
+      if (file.existsSync()) {
+        return Image.file(file, fit: BoxFit.cover);
+      }
+    }
+    return Image.asset(_assetPlaceholder, fit: BoxFit.cover);
+  }
+
+  Color _tintForStatus(PresenceStatus s) {
+    switch (s) {
+      case PresenceStatus.online:
+        return const Color(0xFF42D833);
+      case PresenceStatus.away:
+        return const Color(0xFFE2C92D);
+      case PresenceStatus.busy:
+        return const Color(0xFFD94A4A);
+      case PresenceStatus.appearOffline:
+        return const Color(0xFF9EACB8);
+    }
   }
 }

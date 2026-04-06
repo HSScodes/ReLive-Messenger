@@ -123,13 +123,10 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
 
   Widget _contactAvatarImg(Contact c, {required bool online}) {
     final p = c.avatarLocalPath;
-    Widget img;
     if (p != null && p.isNotEmpty && File(p).existsSync()) {
-      img = Image.file(File(p), fit: BoxFit.cover);
-    } else {
-      img = Image.asset(_assetAvatarUser, fit: BoxFit.cover);
+      return Image.file(File(p), fit: BoxFit.cover);
     }
-    return Opacity(opacity: online ? 1 : 0.55, child: img);
+    return Image.asset(_assetAvatarUser, fit: BoxFit.cover);
   }
 
   Widget _selfAvatarImg(String? path) {
@@ -426,19 +423,21 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
               ],
             ),
             child: Stack(alignment: Alignment.center, children: [
-              // Status-coloured border behind the frame
-              Container(
-                width: 60,
-                height: 60,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(7),
-                  border: Border.all(color: frameColor, width: 2.5),
+              // Photo / placeholder behind the frame
+              ClipRRect(
+                borderRadius: BorderRadius.circular(5),
+                child: _selfAvatarImg(avatarPath),
+              ),
+              // Aero glass frame, recolored by current status
+              Positioned.fill(
+                child: ColorFiltered(
+                  colorFilter: ColorFilter.mode(
+                    frameColor.withValues(alpha: 0.72),
+                    BlendMode.srcATop,
+                  ),
+                  child: Image.asset(_assetAvatarFrame, fit: BoxFit.fill),
                 ),
               ),
-              _img(_assetAvatarFrame, w: 62, h: 62, fit: BoxFit.fill),
-              ClipRRect(
-                  borderRadius: BorderRadius.circular(5),
-                  child: _selfAvatarImg(avatarPath)),
               // Status icon overlay bottom-right
               Positioned(
                 right: 0,
@@ -673,41 +672,31 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
             width: 38,
             height: 38,
             child: Stack(clipBehavior: Clip.none, children: [
+              // Photo / placeholder — fills behind the frame
               Positioned.fill(
                 child: Opacity(
-                  opacity: online ? 1 : 0.55,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(4),
-                      border: Border.all(
-                          color:
-                              _statusAccent(contact.status).withOpacity(0.85),
-                          width: 1.8),
-                      boxShadow: online
-                          ? [
-                              BoxShadow(
-                                  color: _statusAccent(contact.status)
-                                      .withOpacity(0.30),
-                                  blurRadius: 5,
-                                  spreadRadius: 0.3)
-                            ]
-                          : [],
+                  opacity: online ? 1 : 0.45,
+                  child: Padding(
+                    padding: const EdgeInsets.all(3),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(2),
+                      child: _contactAvatarImg(contact, online: online),
                     ),
                   ),
                 ),
               ),
+              // Aero glass frame, recolored by status via ColorFilter
               Positioned.fill(
-                child: Opacity(
-                  opacity: online ? 1 : 0.55,
-                  child: Image.asset(_assetAvatarFrame, fit: BoxFit.fill),
-                ),
-              ),
-              Positioned.fill(
-                child: Padding(
-                  padding: const EdgeInsets.all(4),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(2),
-                    child: _contactAvatarImg(contact, online: online),
+                child: ColorFiltered(
+                  colorFilter: ColorFilter.mode(
+                    online
+                        ? _statusAccent(contact.status).withValues(alpha: 0.72)
+                        : const Color(0xFF9EACB8).withValues(alpha: 0.45),
+                    BlendMode.srcATop,
+                  ),
+                  child: Opacity(
+                    opacity: online ? 1 : 0.7,
+                    child: Image.asset(_assetAvatarFrame, fit: BoxFit.fill),
                   ),
                 ),
               ),

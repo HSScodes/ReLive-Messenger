@@ -48,7 +48,7 @@ class ContactListScreen extends ConsumerWidget {
                         );
                       },
                       leading: AvatarWidget(
-                        initials: _initials(stripWlmColorTags(contact.displayName)),
+                        imagePath: contact.avatarLocalPath,
                         status: contact.status,
                       ),
                       title: Text.rich(
@@ -83,16 +83,5 @@ class ContactListScreen extends ConsumerWidget {
       case PresenceStatus.appearOffline:
         return 'Appear Offline';
     }
-  }
-
-  String _initials(String value) {
-    final trimmed = value.trim();
-    if (trimmed.isEmpty) {
-      return '??';
-    }
-    if (trimmed.length == 1) {
-      return trimmed.toUpperCase();
-    }
-    return trimmed.substring(0, 2).toUpperCase();
   }
 }
