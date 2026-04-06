@@ -1,0 +1,32 @@
+{
+  "@@locale": "pt",
+  "appTitle": "Projeto WLM",
+  "statusOnline": "Disponível",
+  "statusBusy": "Ocupado",
+  "statusAway": "Ausente",
+  "statusAppearOffline": "Aparecer como offline",
+  "statusOffline": "Offline",
+  "contactsFavorites": "Favoritos",
+  "contactsGroups": "Grupos",
+  "contactsAvailable": "Disponível",
+  "contactsOffline": "Offline",
+  "searchContactsWeb": "Procurar contactos ou na Web...",
+  "quickSharePlaceholder": "Partilhar uma mensagem rápida",
+  "syncingContacts": "A sincronizar lista de contactos...",
+  "windowsLiveMessenger": "Windows Live Messenger",
+  "changeStatus": "Alterar estado",
+  "spaceHeyFooter": "SpaceHey - a space for friends.",
+  "messageSays": "{name} diz:",
+  "@messageSays": {
+    "placeholders": {
+      "name": {}
+    }
+  },
+  "messageMeSays": "Eu digo:",
+  "typingIndicator": "{name} está a escrever...",
+  "@typingIndicator": {
+    "placeholders": {
+      "name": {}
+    }
+  }
+}

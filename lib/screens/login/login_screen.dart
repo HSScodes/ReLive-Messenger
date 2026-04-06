@@ -1,0 +1,624 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../config/server_config.dart';
+import '../../network/msnp_client.dart';
+import '../../providers/auth_provider.dart';
+import '../../providers/connection_provider.dart';
+import '../../services/sound_service.dart';
+import '../main_window/main_window.dart';
+
+class LoginScreen extends ConsumerStatefulWidget {
+  const LoginScreen({super.key});
+
+  @override
+  ConsumerState<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends ConsumerState<LoginScreen>
+{
+  static const String _assetBottomGlassBar =
+    'assets/images/extracted/msgsres/carved_png_436872.png';
+  static const String _assetHelpIcon =
+    'assets/images/extracted/msgsres/carved_png_9727920.png';
+  static const String _assetDropdownArrow =
+    'assets/images/extracted/msgsres/carved_png_10968848.png';
+  static const String _assetAvatarFrame =
+    'assets/images/extracted/msgsres/carved_png_9812096.png';
+  static const String _assetAvatarUser =
+    'assets/images/extracted/msgsres/carved_png_9801032.png';
+  static const String _assetCheckboxOff =
+    'assets/images/extracted/msgsres/carved_png_9797544.png';
+  static const String _assetCheckboxOn =
+    'assets/images/extracted/msgsres/carved_png_10738400.png';
+
+  static const List<String> _emailHistory = <String>[
+    'example555@hotmail.com',
+    'account.live@example.com',
+  ];
+
+  static const List<_StatusOption> _statusItems = <_StatusOption>[
+    _StatusOption(
+      value: 'Online',
+      iconAsset: 'assets/images/extracted/msgsres/carved_png_9375216.png',
+    ),
+    _StatusOption(
+      value: 'Busy',
+      iconAsset: 'assets/images/extracted/msgsres/carved_png_9387680.png',
+    ),
+    _StatusOption(
+      value: 'Away',
+      iconAsset: 'assets/images/extracted/msgsres/carved_png_9380960.png',
+    ),
+    _StatusOption(
+      value: 'Appear offline',
+      iconAsset: 'assets/images/extracted/msgsres/carved_png_9394296.png',
+    ),
+  ];
+
+  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
+  bool _rememberMe = false;
+  bool _rememberPassword = false;
+  bool _autoSignIn = false;
+  String _selectedStatus = 'Online';
+  bool _navigatedToMain = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _emailController.text = ServerConfig.devPrefillEmail;
+    _passwordController.text = ServerConfig.devPrefillPassword;
+    _rememberMe = true;
+    _rememberPassword = true;
+  }
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _onSignIn() async {
+    final authNotifier = ref.read(authProvider.notifier);
+    await authNotifier.signIn(
+      email: _emailController.text.trim(),
+      password: _passwordController.text,
+      ticket: _passwordController.text,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    ref.listen(connectionProvider, (_, next) {
+      next.whenData((status) {
+        if (status == ConnectionStatus.connected && !_navigatedToMain) {
+          _navigatedToMain = true;
+          const SoundService().playOnline();
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => const MainWindowScreen()),
+          );
+        }
+      });
+    });
+
+    final authState = ref.watch(authProvider);
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFB8CFDB),
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final pageHeight = constraints.maxHeight < 720 ? 720.0 : constraints.maxHeight;
+
+          return MediaQuery(
+            data: MediaQuery.of(context).copyWith(
+              textScaler: const TextScaler.linear(1.0),
+            ),
+            child: SingleChildScrollView(
+              child: SizedBox(
+                width: constraints.maxWidth,
+                height: pageHeight,
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: Container(
+                        decoration: const BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Color(0xFFD5E4ED),
+                              Color(0xFFC2D6E1),
+                              Color(0xFFB5CCD8),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      child: Container(
+                        height: 64,
+                        decoration: const BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Color(0xFF69B5DE),
+                              Color(0xFF2E8DC6),
+                              Color(0xFF1F6EA6),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      top: 64,
+                      left: 0,
+                      right: 0,
+                      bottom: 45,
+                      child: Center(
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 350),
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(10, 12, 10, 18),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                              Center(
+                                child: SizedBox(
+                                  width: 139,
+                                  height: 139,
+                                  child: Stack(
+                                    alignment: Alignment.center,
+                                    children: [
+                                      Image.asset(_assetAvatarFrame),
+                                      Image.asset(_assetAvatarUser, width: 96, height: 96),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Text(
+                                      'Help',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        color: Color(0xFF35566A),
+                                        fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Image.asset(_assetHelpIcon, width: 16, height: 16),
+                                    const SizedBox(width: 2),
+                                    Image.asset(_assetDropdownArrow, width: 16, height: 16),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              const Center(
+                                child: Text(
+                                  'Sign in',
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    color: Color(0xFF2D5A92),
+                                    fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              const Center(
+                                child: Text(
+                                  'Sign in with your Windows Live ID. Don\'t have one?',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: Color(0xFF2A3B46),
+                                    fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              const Center(
+                                child: Text(
+                                  'Sign up.',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: Color(0xFF0067C6),
+                                    fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 14),
+                              _emailComboField(),
+                              const SizedBox(height: 8),
+                              _classicTextField(
+                                controller: _passwordController,
+                                obscureText: true,
+                                hintText: 'Enter your password',
+                                showDropArrow: true,
+                              ),
+                              const SizedBox(height: 10),
+                              Row(
+                                children: [
+                                  const Text(
+                                    'Sign in as:',
+                                    style: TextStyle(
+                                      fontSize: 15,
+                                      color: Color(0xFF1D2A33),
+                                      fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(child: _statusDropdown()),
+                                ],
+                              ),
+                              const SizedBox(height: 10),
+                              _classicCheckbox(
+                                value: _rememberMe,
+                                label: 'Remember me',
+                                onChanged: (value) {
+                                  setState(() {
+                                    _rememberMe = value ?? false;
+                                  });
+                                },
+                              ),
+                              _classicCheckbox(
+                                value: _rememberPassword,
+                                label: 'Remember my password',
+                                onChanged: (value) {
+                                  setState(() {
+                                    _rememberPassword = value ?? false;
+                                  });
+                                },
+                              ),
+                              _classicCheckbox(
+                                value: _autoSignIn,
+                                label: 'Sign me in automatically',
+                                onChanged: (value) {
+                                  setState(() {
+                                    _autoSignIn = value ?? false;
+                                  });
+                                },
+                              ),
+                              const SizedBox(height: 6),
+                              const Text(
+                                'Forgot your password?',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Color(0xFF0067C6),
+                                  fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              Center(
+                                child: SizedBox(
+                                  width: 148,
+                                  height: 34,
+                                  child: OutlinedButton(
+                                    onPressed: authState.isLoading ? null : _onSignIn,
+                                    style: OutlinedButton.styleFrom(
+                                      side: const BorderSide(color: Color(0xFF5183A6)),
+                                      backgroundColor: const Color(0xFFE3EFF5),
+                                      foregroundColor: const Color(0xFF233E4D),
+                                      shape: const RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.zero,
+                                      ),
+                                      padding: EdgeInsets.zero,
+                                      textStyle: const TextStyle(
+                                        fontSize: 15,
+                                        fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
+                                      ),
+                                    ),
+                                    child: authState.isLoading
+                                        ? const SizedBox(
+                                            width: 16,
+                                            height: 16,
+                                            child: CircularProgressIndicator(strokeWidth: 2),
+                                          )
+                                        : const Text('Sign in'),
+                                  ),
+                                ),
+                              ),
+                              if (authState.error != null) ...[
+                                const SizedBox(height: 8),
+                                Text(
+                                  authState.error!,
+                                  style: const TextStyle(fontSize: 12, color: Color(0xFF9A2525)),
+                                ),
+                              ],
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: _footerBar(),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _emailComboField() {
+    return Container(
+      height: 34,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: const Color(0xFF87A6BD)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _emailController,
+              keyboardType: TextInputType.emailAddress,
+              style: const TextStyle(
+                fontSize: 15,
+                color: Color(0xFF1C2A35),
+                fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
+              ),
+              decoration: const InputDecoration(
+                border: InputBorder.none,
+                isDense: true,
+                contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+                hintText: 'example555@hotmail.com',
+                hintStyle: TextStyle(
+                  fontSize: 15,
+                  color: Color(0xFF5D6C76),
+                  fontStyle: FontStyle.italic,
+                  fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
+                ),
+              ),
+              cursorColor: const Color(0xFF356C8F),
+            ),
+          ),
+          Container(
+            width: 26,
+            height: double.infinity,
+            decoration: const BoxDecoration(
+              border: Border(left: BorderSide(color: Color(0xFFBFD0DC))),
+            ),
+            child: PopupMenuButton<String>(
+              padding: EdgeInsets.zero,
+              tooltip: '',
+              onSelected: (value) {
+                setState(() {
+                  _emailController.text = value;
+                });
+              },
+              itemBuilder: (_) {
+                return _emailHistory
+                    .map(
+                      (email) => PopupMenuItem<String>(
+                        value: email,
+                        height: 28,
+                        child: Text(
+                          email,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            color: Color(0xFF1D2A33),
+                            fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
+                          ),
+                        ),
+                      ),
+                    )
+                    .toList();
+              },
+              icon: Image.asset(_assetDropdownArrow, width: 16, height: 16),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _statusDropdown() {
+    return Container(
+      height: 29,
+      padding: const EdgeInsets.only(left: 8, right: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF3F7FA),
+        border: Border.all(color: const Color(0xFF87A6BD)),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          isExpanded: true,
+          value: _statusItems.any((option) => option.value == _selectedStatus)
+              ? _selectedStatus
+              : _statusItems.first.value,
+          icon: Image.asset(_assetDropdownArrow, width: 16, height: 16),
+          iconSize: 16,
+          dropdownColor: const Color(0xFFF3F7FA),
+          style: const TextStyle(
+            fontSize: 14,
+            color: Color(0xFF1D2A33),
+            fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
+          ),
+          items: _statusItems
+              .map(
+                (status) => DropdownMenuItem<String>(
+                  value: status.value,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.max,
+                    children: [
+                      Image.asset(status.iconAsset, width: 16, height: 16, filterQuality: FilterQuality.none),
+                      const SizedBox(width: 7),
+                      Flexible(
+                        child: Text(
+                          status.value,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+              .toList(),
+          onChanged: (value) {
+            if (value == null) {
+              return;
+            }
+            setState(() {
+              _selectedStatus = value;
+            });
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _footerBar() {
+    return Container(
+      height: 45,
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Stack(
+        children: [
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: Image.asset(
+              _assetBottomGlassBar,
+              height: 25,
+              fit: BoxFit.fill,
+            ),
+          ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Text(
+                'Privacy statement',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Color(0xFF0067C6),
+                  fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Container(width: 1, height: 16, color: const Color(0xFF97AAB6)),
+              const SizedBox(width: 10),
+              const Text(
+                'Server status',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Color(0xFF0067C6),
+                  fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _classicTextField({
+    required TextEditingController controller,
+    bool obscureText = false,
+    TextInputType? keyboardType,
+    String? hintText,
+    bool showDropArrow = false,
+  }) {
+    return SizedBox(
+      height: 34,
+      child: TextField(
+        controller: controller,
+        obscureText: obscureText,
+        keyboardType: keyboardType,
+        style: const TextStyle(
+          fontSize: 15,
+          color: Color(0xFF1C2A35),
+          fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
+        ),
+        decoration: InputDecoration(
+          isDense: true,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          hintText: hintText,
+          hintStyle: const TextStyle(
+            fontSize: 15,
+            color: Color(0xFF5D6C76),
+            fontStyle: FontStyle.italic,
+            fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
+          ),
+          suffixIcon: showDropArrow
+              ? Padding(
+                  padding: const EdgeInsets.fromLTRB(0, 8, 6, 8),
+                  child: Image.asset(_assetDropdownArrow, width: 16, height: 16),
+                )
+              : null,
+          fillColor: Colors.white,
+          filled: true,
+          enabledBorder: const OutlineInputBorder(
+            borderRadius: BorderRadius.zero,
+            borderSide: BorderSide(color: Color(0xFF87A6BD)),
+          ),
+          focusedBorder: const OutlineInputBorder(
+            borderRadius: BorderRadius.zero,
+            borderSide: BorderSide(color: Color(0xFF5E8FB3)),
+          ),
+        ),
+        cursorColor: const Color(0xFF356C8F),
+      ),
+    );
+  }
+
+  Widget _classicCheckbox({
+    required bool value,
+    required String label,
+    required ValueChanged<bool?> onChanged,
+  }) {
+    return SizedBox(
+      height: 28,
+      child: Row(
+        children: [
+          InkWell(
+            onTap: () => onChanged(!value),
+            child: SizedBox(
+              width: 16,
+              height: 16,
+              child: value
+                  ? Image.asset(_assetCheckboxOn, fit: BoxFit.fill)
+                  : Image.asset(_assetCheckboxOff, fit: BoxFit.fill),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 14,
+              color: Color(0xFF2E3E45),
+              fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatusOption {
+  const _StatusOption({
+    required this.value,
+    required this.iconAsset,
+  });
+
+  final String value;
+  final String iconAsset;
+}

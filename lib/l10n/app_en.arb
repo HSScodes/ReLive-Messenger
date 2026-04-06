@@ -1,0 +1,32 @@
+{
+  "@@locale": "en",
+  "appTitle": "WLM Project",
+  "statusOnline": "Online",
+  "statusBusy": "Busy",
+  "statusAway": "Away",
+  "statusAppearOffline": "Appear offline",
+  "statusOffline": "Offline",
+  "contactsFavorites": "Favorites",
+  "contactsGroups": "Groups",
+  "contactsAvailable": "Available",
+  "contactsOffline": "Offline",
+  "searchContactsWeb": "Search contacts or the Web...",
+  "quickSharePlaceholder": "Share a quick message",
+  "syncingContacts": "Syncing contact list...",
+  "windowsLiveMessenger": "Windows Live Messenger",
+  "changeStatus": "Change status",
+  "spaceHeyFooter": "SpaceHey - a space for friends.",
+  "messageSays": "{name} says:",
+  "@messageSays": {
+    "placeholders": {
+      "name": {}
+    }
+  },
+  "messageMeSays": "I say:",
+  "typingIndicator": "{name} is typing...",
+  "@typingIndicator": {
+    "placeholders": {
+      "name": {}
+    }
+  }
+}
