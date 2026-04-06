@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/contact.dart';
 import '../network/msnp_client.dart';
 import '../network/msnp_parser.dart';
+import '../services/avatar_cache_service.dart';
 import '../services/sound_service.dart';
 import '../utils/presence_status.dart';
 import 'connection_provider.dart';
@@ -16,6 +17,11 @@ class ContactsNotifier extends Notifier<List<Contact>> {
   final Set<String> _avatarFetchFailedByEmail = <String>{};
   final Map<String, int> _unreadCountByEmail = <String, int>{};
   final SoundService _soundService = const SoundService();
+  final AvatarCacheService _avatarCache = AvatarCacheService();
+  // Tracks the last sha1d we acted on per-email to avoid redundant fetches.
+  final Map<String, String> _sha1dByEmail = <String, String>{};
+  // Prevents concurrent in-flight directory fetches for the same email.
+  final Set<String> _directoryFetchInFlight = <String>{};
 
   @override
   List<Contact> build() {
@@ -26,7 +32,30 @@ class ContactsNotifier extends Notifier<List<Contact>> {
       _subscription?.cancel();
     });
 
+    // Load persisted avatar cache asynchronously so contacts show stored
+    // avatars immediately on next state rebuild without waiting for P2P.
+    _initCache();
+
     return _snapshotToContacts(client.contactSnapshot);
+  }
+
+  /// Loads persisted avatar paths and sha1d values into the runtime maps.
+  Future<void> _initCache() async {
+    await _avatarCache.init();
+    var changed = false;
+    for (final entry in _avatarCache.entries.entries) {
+      if (!_avatarPathByEmail.containsKey(entry.key)) {
+        _avatarPathByEmail[entry.key] = entry.value;
+        changed = true;
+      }
+      final sha1d = _avatarCache.getStoredSha1d(entry.key);
+      if (sha1d != null && sha1d.isNotEmpty) {
+        _sha1dByEmail[entry.key] = sha1d;
+      }
+    }
+    if (changed && _client != null) {
+      state = _snapshotToContacts(_client!.contactSnapshot);
+    }
   }
 
   Future<void> _onEvent(MsnpEvent event) async {
@@ -60,6 +89,15 @@ class ContactsNotifier extends Notifier<List<Contact>> {
       if (email.isNotEmpty && filePath.isNotEmpty) {
         _avatarPathByEmail[email] = filePath;
         _avatarFetchFailedByEmail.remove(email);
+        // Persist to disk so the avatar survives app restart.
+        final sha1d = _client!.contactSnapshot
+            .where((c) => c.email.toLowerCase() == email)
+            .firstOrNull
+            ?.avatarSha1d;
+        unawaited(_avatarCache.save(email, filePath, sha1d: sha1d));
+        if (sha1d != null && sha1d.isNotEmpty) {
+          _sha1dByEmail[email] = sha1d;
+        }
         state = _snapshotToContacts(_client!.contactSnapshot);
       }
       return;
@@ -140,6 +178,59 @@ class ContactsNotifier extends Notifier<List<Contact>> {
     }
 
     state = next;
+
+    // For each contact that now has a sha1d we haven't seen before (or that
+    // has changed), attempt to resolve the avatar from persistent cache first,
+    // then from the CrossTalk directory, before the slower P2P transfer arrives.
+    _checkSha1dChanges(next);
+  }
+
+  void _checkSha1dChanges(List<Contact> contacts) {
+    for (final contact in contacts) {
+      final sha1d = contact.avatarSha1d;
+      if (sha1d == null || sha1d.isEmpty) continue;
+      final email = contact.email.toLowerCase();
+      if (_sha1dByEmail[email] == sha1d) continue; // already handled this sha1d
+      _sha1dByEmail[email] = sha1d;
+      if (!_directoryFetchInFlight.contains(email)) {
+        unawaited(_resolveAvatar(email, sha1d));
+      }
+    }
+  }
+
+  /// Tries to resolve a display picture for [email] with [sha1d]:
+  ///   1. Persistent cache (instant, zero network)
+  ///   2. CrossTalk directory (fast HTTP GET)
+  /// If resolved, updates state immediately. The background P2P fetch may
+  /// still complete later and will overwrite with the same (or fresher) value.
+  Future<void> _resolveAvatar(String email, String sha1d) async {
+    _directoryFetchInFlight.add(email);
+    try {
+      // 1. Check persistent cache with sha1d match.
+      final cached = await _avatarCache.get(email, currentSha1d: sha1d);
+      if (cached != null) {
+        _avatarPathByEmail[email] = cached;
+        _avatarFetchFailedByEmail.remove(email);
+        if (_client != null) {
+          state = _snapshotToContacts(_client!.contactSnapshot);
+        }
+        return;
+      }
+
+      // 2. Try CrossTalk directory as a fast-path before P2P completes.
+      if (_avatarFetchFailedByEmail.contains(email)) return;
+      final path = await _avatarCache.fetchFromCrosstalkDirectory(email);
+      if (path != null) {
+        await _avatarCache.save(email, path, sha1d: sha1d);
+        _avatarPathByEmail[email] = path;
+        _avatarFetchFailedByEmail.remove(email);
+        if (_client != null) {
+          state = _snapshotToContacts(_client!.contactSnapshot);
+        }
+      }
+    } finally {
+      _directoryFetchInFlight.remove(email);
+    }
   }
 
   List<Contact> _snapshotToContacts(List<MsnpContactSnapshot> snapshot) {

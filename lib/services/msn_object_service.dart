@@ -5,8 +5,6 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:path_provider/path_provider.dart';
 
-import '../config/server_config.dart';
-
 class ParsedMsnObject {
   const ParsedMsnObject({
     this.url,
@@ -345,7 +343,7 @@ class MsnObjectService {
   }
 
   Future<Directory> _avatarCacheDir() async {
-    final root = await getTemporaryDirectory();
+    final root = await getApplicationDocumentsDirectory();
     final dir = Directory('${root.path}${Platform.pathSeparator}wlm_avatars');
     if (!dir.existsSync()) {
       await dir.create(recursive: true);
