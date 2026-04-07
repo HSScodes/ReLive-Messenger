@@ -45,6 +45,8 @@ dependencies:
   intl: ^0.20.2
   shared_preferences: ^2.5.3
   file_picker: ^10.1.9
+  flutter_local_notifications: ^18.0.1
+  flutter_foreground_task: ^8.13.3
 
 dev_dependencies:
   flutter_test:
@@ -99,6 +101,9 @@ flutter:
     - assets/images/extracted/wldlog/
     - assets/images/extracted/wmaecdmort/
     - assets/images/extracted/wmv9vcm/
+    - assets/images/scenes/
+    - assets/images/usertiles/
+    - assets/images/backgrounds/
 
   fonts:
     - family: SegoeUI

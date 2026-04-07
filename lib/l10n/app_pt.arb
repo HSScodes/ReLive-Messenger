@@ -15,18 +15,35 @@
   "syncingContacts": "A sincronizar lista de contactos...",
   "windowsLiveMessenger": "Windows Live Messenger",
   "changeStatus": "Alterar estado",
-  "spaceHeyFooter": "SpaceHey - a space for friends.",
+  "spaceHeyFooter": "",
   "messageSays": "{name} diz:",
   "@messageSays": {
     "placeholders": {
       "name": {}
     }
   },
-  "messageMeSays": "Eu digo:",
+  "messageMeSays": "{name} diz:",
+  "@messageMeSays": {
+    "placeholders": {
+      "name": {}
+    }
+  },
+  "messageSends": "{name} envia:",
+  "@messageSends": {
+    "placeholders": {
+      "name": {}
+    }
+  },
   "typingIndicator": "{name} está a escrever...",
   "@typingIndicator": {
     "placeholders": {
       "name": {}
     }
-  }
+  },
+  "moreStatuses": "Mais Estados",
+  "signOutHere": "Terminar sessão aqui",
+  "changeDisplayPicture": "Alterar imagem de apresentação...",
+  "changeScene": "Alterar cenário...",
+  "changeDisplayName": "Alterar nome a apresentar...",
+  "menuOptions": "Opções..."
 }

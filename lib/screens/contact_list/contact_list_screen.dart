@@ -48,7 +48,7 @@ class ContactListScreen extends ConsumerWidget {
                         );
                       },
                       leading: AvatarWidget(
-                        imagePath: contact.avatarLocalPath,
+                        imagePath: contact.ddpLocalPath ?? contact.avatarLocalPath,
                         status: contact.status,
                       ),
                       title: Text.rich(

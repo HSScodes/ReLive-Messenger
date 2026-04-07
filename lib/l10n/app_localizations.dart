@@ -188,7 +188,7 @@ abstract class AppLocalizations {
   /// No description provided for @spaceHeyFooter.
   ///
   /// In en, this message translates to:
-  /// **'SpaceHey - a space for friends.'**
+  /// **''**
   String get spaceHeyFooter;
 
   /// No description provided for @messageSays.
@@ -200,14 +200,56 @@ abstract class AppLocalizations {
   /// No description provided for @messageMeSays.
   ///
   /// In en, this message translates to:
-  /// **'I say:'**
-  String get messageMeSays;
+  /// **'{name} says:'**
+  String messageMeSays(Object name);
+
+  /// No description provided for @messageSends.
+  ///
+  /// In en, this message translates to:
+  /// **'{name} sends:'**
+  String messageSends(Object name);
 
   /// No description provided for @typingIndicator.
   ///
   /// In en, this message translates to:
   /// **'{name} is typing...'**
   String typingIndicator(Object name);
+
+  /// No description provided for @moreStatuses.
+  ///
+  /// In en, this message translates to:
+  /// **'More Statuses'**
+  String get moreStatuses;
+
+  /// No description provided for @signOutHere.
+  ///
+  /// In en, this message translates to:
+  /// **'Sign out here'**
+  String get signOutHere;
+
+  /// No description provided for @changeDisplayPicture.
+  ///
+  /// In en, this message translates to:
+  /// **'Change display picture...'**
+  String get changeDisplayPicture;
+
+  /// No description provided for @changeScene.
+  ///
+  /// In en, this message translates to:
+  /// **'Change scene...'**
+  String get changeScene;
+
+  /// No description provided for @changeDisplayName.
+  ///
+  /// In en, this message translates to:
+  /// **'Change display name...'**
+  String get changeDisplayName;
+
+  /// No description provided for @menuOptions.
+  ///
+  /// In en, this message translates to:
+  /// **'Options...'**
+  String get menuOptions;
 }
 
 class _AppLocalizationsDelegate extends LocalizationsDelegate<AppLocalizations> {

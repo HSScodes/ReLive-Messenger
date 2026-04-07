@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../config/server_config.dart';
 import '../../network/msnp_client.dart';
@@ -7,6 +8,7 @@ import '../../providers/auth_provider.dart';
 import '../../providers/connection_provider.dart';
 import '../../services/sound_service.dart';
 import '../main_window/main_window.dart';
+import 'connecting_screen.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -61,8 +63,15 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
   bool _rememberMe = false;
   bool _rememberPassword = false;
   bool _autoSignIn = false;
+  bool _obscurePassword = true;
   String _selectedStatus = 'Online';
   bool _navigatedToMain = false;
+
+  static const _keyRememberMe = 'wlm_remember_me';
+  static const _keyRememberPw = 'wlm_remember_password';
+  static const _keyAutoSignIn = 'wlm_auto_sign_in';
+  static const _keySavedEmail = 'wlm_saved_email';
+  static const _keySavedPw = 'wlm_saved_password';
 
   @override
   void initState() {
@@ -71,6 +80,55 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
     _passwordController.text = ServerConfig.devPrefillPassword;
     _rememberMe = true;
     _rememberPassword = true;
+    _loadSavedPreferences();
+  }
+
+  Future<void> _loadSavedPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedRememberMe = prefs.getBool(_keyRememberMe) ?? false;
+    final savedRememberPw = prefs.getBool(_keyRememberPw) ?? false;
+    final savedAutoSignIn = prefs.getBool(_keyAutoSignIn) ?? false;
+    final savedEmail = prefs.getString(_keySavedEmail);
+    final savedPw = prefs.getString(_keySavedPw);
+
+    if (!mounted) return;
+    setState(() {
+      _rememberMe = savedRememberMe;
+      _rememberPassword = savedRememberPw;
+      _autoSignIn = savedAutoSignIn;
+      if (savedRememberMe && savedEmail != null && savedEmail.isNotEmpty) {
+        _emailController.text = savedEmail;
+      }
+      if (savedRememberPw && savedPw != null && savedPw.isNotEmpty) {
+        _passwordController.text = savedPw;
+      }
+    });
+
+    // Auto sign-in if credentials are present
+    if (savedAutoSignIn &&
+        _emailController.text.trim().isNotEmpty &&
+        _passwordController.text.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _onSignIn();
+      });
+    }
+  }
+
+  Future<void> _savePreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyRememberMe, _rememberMe);
+    await prefs.setBool(_keyRememberPw, _rememberPassword);
+    await prefs.setBool(_keyAutoSignIn, _autoSignIn);
+    if (_rememberMe) {
+      await prefs.setString(_keySavedEmail, _emailController.text.trim());
+    } else {
+      await prefs.remove(_keySavedEmail);
+    }
+    if (_rememberPassword) {
+      await prefs.setString(_keySavedPw, _passwordController.text);
+    } else {
+      await prefs.remove(_keySavedPw);
+    }
   }
 
   @override
@@ -81,7 +139,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
   }
 
   Future<void> _onSignIn() async {
+    await _savePreferences();
     final authNotifier = ref.read(authProvider.notifier);
+    // Navigate to connecting screen immediately
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const ConnectingScreen()),
+    );
     await authNotifier.signIn(
       email: _emailController.text.trim(),
       password: _passwordController.text,
@@ -96,9 +159,16 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
         if (status == ConnectionStatus.connected && !_navigatedToMain) {
           _navigatedToMain = true;
           const SoundService().playOnline();
-          Navigator.of(context).pushReplacement(
+          // Pop connecting screen + push main window, replacing all routes
+          Navigator.of(context).pushAndRemoveUntil(
             MaterialPageRoute(builder: (_) => const MainWindowScreen()),
+            (_) => false,
           );
+        } else if (status == ConnectionStatus.error && !_navigatedToMain) {
+          // Pop back to the login screen on error
+          if (Navigator.of(context).canPop()) {
+            Navigator.of(context).pop();
+          }
         }
       });
     });
@@ -240,9 +310,20 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                               const SizedBox(height: 8),
                               _classicTextField(
                                 controller: _passwordController,
-                                obscureText: true,
+                                obscureText: _obscurePassword,
                                 hintText: 'Enter your password',
-                                showDropArrow: true,
+                                showDropArrow: false,
+                                suffixWidget: GestureDetector(
+                                  onTap: () => setState(() => _obscurePassword = !_obscurePassword),
+                                  child: Padding(
+                                    padding: const EdgeInsets.fromLTRB(0, 6, 6, 6),
+                                    child: Icon(
+                                      _obscurePassword ? Icons.visibility_off : Icons.visibility,
+                                      size: 18,
+                                      color: const Color(0xFF5D6C76),
+                                    ),
+                                  ),
+                                ),
                               ),
                               const SizedBox(height: 10),
                               Row(
@@ -535,6 +616,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
     TextInputType? keyboardType,
     String? hintText,
     bool showDropArrow = false,
+    Widget? suffixWidget,
   }) {
     return SizedBox(
       height: 34,
@@ -557,12 +639,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
             fontStyle: FontStyle.italic,
             fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
           ),
-          suffixIcon: showDropArrow
-              ? Padding(
-                  padding: const EdgeInsets.fromLTRB(0, 8, 6, 8),
-                  child: Image.asset(_assetDropdownArrow, width: 16, height: 16),
-                )
-              : null,
+          suffixIcon: suffixWidget ??
+              (showDropArrow
+                  ? Padding(
+                      padding: const EdgeInsets.fromLTRB(0, 8, 6, 8),
+                      child: Image.asset(_assetDropdownArrow, width: 16, height: 16),
+                    )
+                  : null),
           fillColor: Colors.white,
           filled: true,
           enabledBorder: const OutlineInputBorder(

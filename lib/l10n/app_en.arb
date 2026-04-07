@@ -15,18 +15,35 @@
   "syncingContacts": "Syncing contact list...",
   "windowsLiveMessenger": "Windows Live Messenger",
   "changeStatus": "Change status",
-  "spaceHeyFooter": "SpaceHey - a space for friends.",
+  "spaceHeyFooter": "",
   "messageSays": "{name} says:",
   "@messageSays": {
     "placeholders": {
       "name": {}
     }
   },
-  "messageMeSays": "I say:",
+  "messageMeSays": "{name} says:",
+  "@messageMeSays": {
+    "placeholders": {
+      "name": {}
+    }
+  },
+  "messageSends": "{name} sends:",
+  "@messageSends": {
+    "placeholders": {
+      "name": {}
+    }
+  },
   "typingIndicator": "{name} is typing...",
   "@typingIndicator": {
     "placeholders": {
       "name": {}
     }
-  }
+  },
+  "moreStatuses": "More Statuses",
+  "signOutHere": "Sign out here",
+  "changeDisplayPicture": "Change display picture...",
+  "changeScene": "Change scene...",
+  "changeDisplayName": "Change display name...",
+  "menuOptions": "Options..."
 }

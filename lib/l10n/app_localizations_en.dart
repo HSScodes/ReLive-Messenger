@@ -54,7 +54,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get changeStatus => 'Change status';
 
   @override
-  String get spaceHeyFooter => 'SpaceHey - a space for friends.';
+  String get spaceHeyFooter => '';
 
   @override
   String messageSays(Object name) {
@@ -62,10 +62,35 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String get messageMeSays => 'I say:';
+  String messageMeSays(Object name) {
+    return '$name says:';
+  }
+
+  @override
+  String messageSends(Object name) {
+    return '$name sends:';
+  }
 
   @override
   String typingIndicator(Object name) {
     return '$name is typing...';
   }
+
+  @override
+  String get moreStatuses => 'More Statuses';
+
+  @override
+  String get signOutHere => 'Sign out here';
+
+  @override
+  String get changeDisplayPicture => 'Change display picture...';
+
+  @override
+  String get changeScene => 'Change scene...';
+
+  @override
+  String get changeDisplayName => 'Change display name...';
+
+  @override
+  String get menuOptions => 'Options...';
 }

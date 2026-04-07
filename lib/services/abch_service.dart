@@ -198,11 +198,11 @@ class AbchService {
               'name',
               'nickname',
             ]) ??
-            email.split('@').first;
+          email;
 
         final safeDisplayName = _isLikelyDisplayName(displayName)
             ? displayName
-            : email.split('@').first;
+          : email;
 
         final normalizedEmail = email.toLowerCase();
         if (normalizedEmail == owner || normalizedEmail.contains('hotmail')) {
@@ -234,7 +234,7 @@ class AbchService {
         }
         rosterByEmail[email] = AbchRosterEntry(
           email: email,
-          displayName: email.split('@').first,
+          displayName: email,
         );
       }
     } catch (_) {

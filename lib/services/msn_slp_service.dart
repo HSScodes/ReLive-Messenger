@@ -121,7 +121,7 @@ class MsnSlpService {
     header.setUint32(44, (ackedTotalSize >> 32) & 0xFFFFFFFF, Endian.little);
 
     final footer = ByteData(4);
-    footer.setUint32(0, 0, Endian.little); // footer = 0 for ACK
+    footer.setUint32(0, 0, Endian.big); // footer = 0 for ACK
 
     return <int>[
       ...header.buffer.asUint8List(),
@@ -159,11 +159,82 @@ class MsnSlpService {
     header.setUint64(40, 0, Endian.little);
 
     final footerBytes = ByteData(4);
-    footerBytes.setUint32(0, footer, Endian.little);
+    footerBytes.setUint32(0, footer, Endian.big);
 
     return <int>[
       ...header.buffer.asUint8List(),
       ...slpBytes,
+      ...footerBytes.buffer.asUint8List(),
+    ];
+  }
+
+  /// Builds a P2P binary data chunk (for avatar or file transfer data).
+  List<int> buildP2pDataChunk({
+    required int sessionId,
+    required int baseId,
+    required int offset,
+    required int totalSize,
+    required List<int> chunkData,
+    int flags = 0x20,
+    int footer = 1,
+  }) {
+    final header = ByteData(48);
+    header.setUint32(0, sessionId, Endian.little);
+    header.setUint32(4, baseId, Endian.little);
+    header.setUint64(8, offset, Endian.little);         // Offset
+    header.setUint64(16, totalSize, Endian.little);      // TotalDataSize
+    header.setUint32(24, chunkData.length, Endian.little); // MessageSize
+    header.setUint32(28, flags, Endian.little);           // Flags (0x20 = data)
+    header.setUint32(32, 0, Endian.little);
+    header.setUint32(36, 0, Endian.little);
+    header.setUint64(40, 0, Endian.little);
+
+    final footerBytes = ByteData(4);
+    footerBytes.setUint32(0, footer, Endian.big);
+
+    return <int>[
+      ...header.buffer.asUint8List(),
+      ...chunkData,
+      ...footerBytes.buffer.asUint8List(),
+    ];
+  }
+
+  /// Builds a P2P data-preparation packet.
+  ///
+  /// WLM 2009 expects this 4-byte "data-prep" frame between the 200 OK and
+  /// the actual image/file data.  Without it the peer's P2P state machine
+  /// never transitions to the data-receive state and eventually times out.
+  ///
+  /// Format observed in real WLM 2009 traffic:
+  ///   SessionID = allocated session ID
+  ///   Flags     = 0x00
+  ///   MsgSize   = 4, TotalSize = 4
+  ///   Body      = 4 bytes of 0x00
+  ///   Footer    = AppID (1 = display picture, 2 = file transfer)
+  List<int> buildDataPrepPacket({
+    required int sessionId,
+    required int baseId,
+    int footer = 1,
+  }) {
+    final header = ByteData(48);
+    header.setUint32(0, sessionId, Endian.little);
+    header.setUint32(4, baseId, Endian.little);
+    header.setUint64(8, 0, Endian.little);          // Offset = 0
+    header.setUint64(16, 4, Endian.little);          // TotalDataSize = 4
+    header.setUint32(24, 4, Endian.little);          // MessageSize = 4
+    header.setUint32(28, 0, Endian.little);          // Flags = 0x00
+    header.setUint32(32, 0, Endian.little);
+    header.setUint32(36, 0, Endian.little);
+    header.setUint64(40, 0, Endian.little);
+
+    final body = Uint8List(4); // 4 zero bytes
+
+    final footerBytes = ByteData(4);
+    footerBytes.setUint32(0, footer, Endian.big);
+
+    return <int>[
+      ...header.buffer.asUint8List(),
+      ...body,
       ...footerBytes.buffer.asUint8List(),
     ];
   }
@@ -239,6 +310,8 @@ class MsnSlpService {
     final totalSize   = header.getUint64(16, Endian.little);
     final messageSize = header.getUint32(24, Endian.little);
     final flags       = header.getUint32(28, Endian.little);
+    final ackSessionId = header.getUint32(32, Endian.little);
+    final ackUniqueId  = header.getUint32(36, Endian.little);
 
     if (messageSize == 0) {
       return P2pInboundFrame(
@@ -249,6 +322,8 @@ class MsnSlpService {
         messageSize: messageSize,
         flags: flags,
         slpText: '',
+        ackSessionId: ackSessionId,
+        ackUniqueId: ackUniqueId,
       );
     }
 
@@ -267,6 +342,8 @@ class MsnSlpService {
       messageSize: messageSize,
       flags: flags,
       slpText: slpText,
+      ackSessionId: ackSessionId,
+      ackUniqueId: ackUniqueId,
     );
   }
 
@@ -461,6 +538,8 @@ class P2pInboundFrame {
     required this.messageSize,
     required this.flags,
     required this.slpText,
+    this.ackSessionId = 0,
+    this.ackUniqueId = 0,
   });
 
   final int sessionId;
@@ -471,6 +550,10 @@ class P2pInboundFrame {
   final int messageSize;
   final int flags;
   final String slpText;
+  /// AckSessionID at offset 32 — identifies the session being ACK/NAK'd.
+  final int ackSessionId;
+  /// AckUniqueID at offset 36 — identifies the baseId being ACK/NAK'd.
+  final int ackUniqueId;
 }
 
 /// Returned by [MsnSlpService.buildDisplayPictureInviteBinary] so the caller

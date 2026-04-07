@@ -8,9 +8,11 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config/server_config.dart';
 import '../services/abch_service.dart';
+import '../services/file_transfer_service.dart';
 import '../services/msn_object_service.dart';
 import '../services/msn_slp_service.dart';
 import '../services/p2p_session_manager.dart';
@@ -72,6 +74,10 @@ class MsnpClient {
 
   /// Exposes the P2P session manager so providers can observe transfer status.
   P2pSessionManager get p2pSessionManager => _p2pSessionManager;
+
+  final FileTransferService _fileTransferService = FileTransferService();
+  /// Exposes the file transfer service for providers / UI.
+  FileTransferService get fileTransferService => _fileTransferService;
   final Set<String> _avatarInviteSent = <String>{};
   final Set<String> _avatarInvitePending = <String>{};
   final Set<String> _avatarSilentRequested = <String>{};
@@ -105,13 +111,24 @@ class MsnpClient {
   /// connection may be started so that the in-progress session can complete.
   String? _sbP2pInFlightEmail;
   Timer? _sbP2pResponseTimeout;
+  /// Per-contact avatar stall timers (15s timeout per avatar transfer).
+  final Map<String, Timer> _avatarStallTimers = <String, Timer>{};
+  /// Session IDs for which we already started serving our avatar.
+  /// Prevents duplicate processing when the same INVITE is received
+  /// multiple times on the same SB connection.
+  final Set<int> _handledAvatarSessionIds = <int>{};
+  /// Completers to await peer's data-complete ACK (Flags=0x02) per session.
+  final Map<int, Completer<void>> _ftDataAckCompleters = <int, Completer<void>>{};
   Timer? _sbXfrTimeout;
+  Timer? _sbQueueWatchdog;
   String _email = '';
+  String _selfDisplayName = '';
   String _ticket = '';
   String? _mspAuth;
   String? _mspProf;
   String? _sid;
   String? _selfAvatarMsnObject;
+  String? _selfAvatarPath;
   String _selfPsm = '';
   String _selfCurrentMedia = '';
   String _selfScene = '';
@@ -142,6 +159,8 @@ class MsnpClient {
             avatarMsnObject: c.avatarMsnObject,
             avatarCreator: c.avatarCreator,
             avatarSha1d: c.avatarSha1d,
+            ddpMsnObject: c.ddpMsnObject,
+            ddpSha1d: c.ddpSha1d,
             scene: c.scene,
             colorScheme: c.colorScheme,
           ),
@@ -153,6 +172,10 @@ class MsnpClient {
   String get sessionTicket => _ticket;
   String get sessionHost => _connectedHost;
   String get selfEmail => _email;
+  String get selfDisplayName {
+    if (_selfDisplayName.isNotEmpty) return _selfDisplayName;
+    return _email;
+  }
   String? get selfAvatarMsnObject => _selfAvatarMsnObject;
   String get selfScene => _selfScene;
   String get selfColorScheme => _selfColorScheme;
@@ -171,11 +194,15 @@ class MsnpClient {
   void _sendUux() {
     if (_socket == null) return;
     final machineGuid = endpointGuid;
+    // Include the avatar MSNObject in <DDP> so contacts can fetch our avatar.
+    final ddpContent = _selfAvatarMsnObject != null && _selfAvatarMsnObject!.isNotEmpty
+        ? _xmlEscape(_selfAvatarMsnObject!)
+        : '';
     final payload = '<Data>'
         '<PSM>${_xmlEscape(_selfPsm)}</PSM>'
         '<CurrentMedia>${_xmlEscape(_selfCurrentMedia)}</CurrentMedia>'
         '<MachineGuid>$machineGuid</MachineGuid>'
-        '<DDP></DDP>'
+        '<DDP>$ddpContent</DDP>'
         '<SignatureSound></SignatureSound>'
         '<Scene>${_xmlEscape(_selfScene)}</Scene>'
         '<ColorScheme>${_xmlEscape(_selfColorScheme)}</ColorScheme>'
@@ -183,25 +210,112 @@ class MsnpClient {
     _send(MsnpCommands.uux(_nextTrId(), payload));
     _log('UUX sent: psm=${_selfPsm.isEmpty ? "(empty)" : _selfPsm}, '
         'scene=${_selfScene.isEmpty ? "(default)" : "(custom)"}, '
-        'colorScheme=$_selfColorScheme');
+        'colorScheme=$_selfColorScheme, '
+        'ddp=${ddpContent.isEmpty ? "(none)" : "(set)"}');
   }
 
   /// Updates the personal status message and broadcasts via UUX.
   void setPersonalMessage(String psm) {
     _selfPsm = psm;
     _sendUux();
+    // Persist so it survives app restarts
+    _savePsm(psm);
+  }
+
+  /// Persist PSM for the current account.
+  Future<void> _savePsm(String psm) async {
+    if (_email.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('wlm_psm_${_email.toLowerCase()}', psm);
+  }
+
+  /// Load previously persisted PSM for [email].
+  Future<String> _loadPsm(String email) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('wlm_psm_${email.toLowerCase()}') ?? '';
+  }
+
+  Future<void> _saveSelfDisplayName(String name) async {
+    if (_email.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('wlm_display_name_${_email.toLowerCase()}', name);
+  }
+
+  Future<String> _loadSelfDisplayName(String email) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('wlm_display_name_${email.toLowerCase()}') ?? '';
+  }
+
+  Future<void> _saveSelfScene(String scene) async {
+    if (_email.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('wlm_scene_${_email.toLowerCase()}', scene);
+  }
+
+  Future<String> _loadSelfScene(String email) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('wlm_scene_${email.toLowerCase()}') ?? '';
+  }
+
+  Future<void> _saveSelfColorScheme(String colorScheme) async {
+    if (_email.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('wlm_color_scheme_${_email.toLowerCase()}', colorScheme);
+  }
+
+  Future<String> _loadSelfColorScheme(String email) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('wlm_color_scheme_${email.toLowerCase()}') ?? '-1';
+  }
+
+  /// Pre-loads the persisted avatar file and generates MSNObject so it's
+  /// available for the very first CHG/UUX sent during bootstrap.
+  Future<void> _preloadSelfAvatar(String email) async {
+    final prefs = await SharedPreferences.getInstance();
+    final path = prefs.getString('wlm_self_avatar_path_${email.toLowerCase()}');
+    if (path == null || path.isEmpty) return;
+    final file = File(path);
+    if (!file.existsSync()) return;
+    final msnObj = await _msnObjectService.generateMsnObjectXml(
+      creatorEmail: email,
+      avatarFilePath: path,
+      friendlyName: selfDisplayName,
+    );
+    if (msnObj == null) return;
+    _selfAvatarMsnObject = msnObj;
+    _selfAvatarPath = path;
+    _log('Pre-loaded avatar MSNObject from $path (${msnObj.length} chars)');
+  }
+
+  /// Sends an MSNP PNG keepalive to the server. Called from the foreground
+  /// service callback to keep the session alive while the app is backgrounded.
+  void sendPing() {
+    if (_socket == null) return;
+    _send(MsnpCommands.png());
   }
 
   /// Updates the scene (base64 image data or empty for default) and broadcasts.
   void setScene(String scene) {
     _selfScene = scene;
+    unawaited(_saveSelfScene(scene));
     _sendUux();
   }
 
   /// Updates the colour scheme (packed signed int, e.g. "-1" for default) and broadcasts.
   void setColorScheme(String colorScheme) {
     _selfColorScheme = colorScheme;
+    unawaited(_saveSelfColorScheme(colorScheme));
     _sendUux();
+  }
+
+  /// Updates the user's display (friendly) name on the server via PRP MFN.
+  void setDisplayName(String name) {
+    _selfDisplayName = name;
+    unawaited(_saveSelfDisplayName(name));
+    if (_socket == null) return;
+    final encoded = Uri.encodeComponent(name);
+    _send(MsnpCommands.prpMfn(_nextTrId(), encoded));
+    _log('PRP MFN sent: $name');
   }
 
   /// Updates multiple self-status fields at once and sends a single UUX.
@@ -215,6 +329,12 @@ class MsnpClient {
     if (currentMedia != null) _selfCurrentMedia = currentMedia;
     if (scene != null) _selfScene = scene;
     if (colorScheme != null) _selfColorScheme = colorScheme;
+    if (scene != null) {
+      unawaited(_saveSelfScene(scene));
+    }
+    if (colorScheme != null) {
+      unawaited(_saveSelfColorScheme(colorScheme));
+    }
     _sendUux();
   }
 
@@ -237,6 +357,16 @@ class MsnpClient {
     _email = email;
     _connectedHost = host;
     _keepAliveSeconds = 45;
+
+    // Restore persisted PSM so it's broadcast in the first UUX after auth.
+    _selfPsm = await _loadPsm(email);
+    _selfDisplayName = await _loadSelfDisplayName(email);
+    _selfScene = await _loadSelfScene(email);
+    _selfColorScheme = await _loadSelfColorScheme(email);
+
+    // Pre-load persisted avatar so the first CHG/UUX include the MSNObject.
+    await _preloadSelfAvatar(email);
+
     _synAttemptStage = 0;
     _synRetriedAfterChallenge = false;
     _sentLegacySyncBootstrap = false;
@@ -255,7 +385,7 @@ class MsnpClient {
     _mspAuth = null;
     _mspProf = null;
     _sid = null;
-    _selfAvatarMsnObject = null;
+    // _selfAvatarMsnObject is set by _preloadSelfAvatar() above — don't reset it.
     _knownContacts.clear();
     _avatarInviteSent.clear();
     _avatarInvitePending.clear();
@@ -289,6 +419,7 @@ class MsnpClient {
 
       _log('Socket connected to $host:$port');
       _send(MsnpCommands.ver(_nextTrId()));
+      _startSbQueueWatchdog();
     } on SocketException {
       _log('SocketException while connecting/authenticating.');
       _statusController.add(ConnectionStatus.error);
@@ -305,7 +436,47 @@ class MsnpClient {
       return;
     }
     _selfPresence = status;
-    _send(MsnpCommands.chg(_nextTrId(), presenceToMsnp(status), capabilities: MsnpCommands.wlm2009Capabilities));
+    _send(MsnpCommands.chg(
+      _nextTrId(),
+      presenceToMsnp(status),
+      capabilities: MsnpCommands.wlm2009Capabilities,
+      msnObject: _encodedSelfMsnObject,
+    ));
+  }
+
+  /// URL-encoded MSNObject for inclusion in CHG commands.
+  String? get _encodedSelfMsnObject {
+    if (_selfAvatarMsnObject == null || _selfAvatarMsnObject!.isEmpty) return null;
+    return Uri.encodeComponent(_selfAvatarMsnObject!);
+  }
+
+  /// (Re)generates the local MSNObject from [avatarPath] and broadcasts it.
+  /// Called after the user picks a new avatar or on connect with a persisted one.
+  Future<void> updateSelfAvatarMsnObject(String? avatarPath) async {
+    if (avatarPath == null || avatarPath.isEmpty) {
+      _selfAvatarMsnObject = null;
+      return;
+    }
+    final msnObj = await _msnObjectService.generateMsnObjectXml(
+      creatorEmail: _email,
+      avatarFilePath: avatarPath,
+      friendlyName: selfDisplayName,
+    );
+    if (msnObj == null) return;
+    _selfAvatarMsnObject = msnObj;
+    _selfAvatarPath = avatarPath;
+    _handledAvatarSessionIds.clear();
+    _log('Self avatar MSNObject updated: ${msnObj.length} chars');
+    // Rebroadcast presence and UUX with the new MSNObject.
+    if (_socket != null) {
+      _send(MsnpCommands.chg(
+        _nextTrId(),
+        presenceToMsnp(_selfPresence),
+        capabilities: MsnpCommands.wlm2009Capabilities,
+        msnObject: _encodedSelfMsnObject,
+      ));
+      _sendUux();
+    }
   }
 
   Future<void> sendInstantMessage({
@@ -354,8 +525,13 @@ class MsnpClient {
       if (!_avatarInviteSent.contains(activeKey)) {
         _avatarSilentRequested.removeWhere((k) => k.startsWith('$normalized|'));
       }
-      // Never clear _avatarInviteSent here — let _markAvatarFetchFailed /
-      // _onP2pAvatarReady manage that when the outcome is known.
+      // On explicit force-refresh, clear the invite dedup so a new INVITE can
+      // be sent even if the SHA1D hasn't changed.  Skip only when the INVITE
+      // is already in-flight (active SB transfer for this contact).
+      if (_sbP2pInFlightEmail != normalized) {
+        _avatarInviteSent.removeWhere((k) => k.startsWith('$normalized|'));
+        _avatarSilentRequested.removeWhere((k) => k.startsWith('$normalized|'));
+      }
     }
     final known = _knownContacts[normalized];
     if (known == null) {
@@ -372,6 +548,52 @@ class MsnpClient {
       fullMsnObjectXml: msnObj,
       eagerBackground: true,
     );
+  }
+
+  /// Add a contact to the forward/allow lists via ADL.
+  void addContact(String email) {
+    final normalized = email.trim().toLowerCase();
+    if (normalized.isEmpty || !normalized.contains('@') || _socket == null) {
+      return;
+    }
+    final parts = normalized.split('@');
+    if (parts.length != 2) return;
+    final local = _escapeXmlAttr(parts[0]);
+    final domain = _escapeXmlAttr(parts[1]);
+    // l="3" = Forward (1) + Allow (2)
+    final payload = '<ml l="1"><d n="$domain"><c n="$local" l="3" t="1" /></d></ml>';
+    _send(MsnpCommands.adl(_nextTrId(), payload));
+    _log('ADL add-contact sent for $normalized');
+    // Remember as known contact immediately so it shows in UI
+    _rememberContact(
+      email: normalized,
+      displayName: normalized,
+    );
+  }
+
+  /// Remove a contact from the forward/allow lists via RML.
+  void removeContact(String email) {
+    final normalized = email.trim().toLowerCase();
+    if (normalized.isEmpty || !normalized.contains('@') || _socket == null) {
+      return;
+    }
+    final parts = normalized.split('@');
+    if (parts.length != 2) return;
+    final local = _escapeXmlAttr(parts[0]);
+    final domain = _escapeXmlAttr(parts[1]);
+    // l="3" = Forward (1) + Allow (2) — same mask used for ADL
+    final payload = '<ml><d n="$domain"><c n="$local" l="3" t="1" /></d></ml>';
+    _send(MsnpCommands.rml(_nextTrId(), payload));
+    _log('RML remove-contact sent for $normalized');
+    // Remove from known contacts so UI updates immediately
+    _knownContacts.remove(normalized);
+    // Emit a contact event so providers rebuild and remove the contact from UI.
+    _eventController.add(MsnpEvent(
+      type: MsnpEventType.contact,
+      command: 'RML',
+      from: normalized,
+      raw: 'RML $normalized',
+    ));
   }
 
   Future<void> sendTypingNotification({required String to}) async {
@@ -392,8 +614,8 @@ class MsnpClient {
     final payload = StringBuffer()
       ..write('MIME-Version: 1.0\r\n')
       ..write('Content-Type: text/x-msnmsgr-datacast\r\n')
-      ..write('ID: 1\r\n')
-      ..write('\r\n');
+      ..write('\r\n')
+      ..write('ID: 1\r\n');
     _sendToSwitchboard(
       to: to,
       payloadBytes: utf8.encode(payload.toString()),
@@ -402,8 +624,247 @@ class MsnpClient {
     );
   }
 
+  /// Invites another contact into the current switchboard session (CAL).
+  void inviteToSwitchboard(String email) {
+    if (_sbSocket == null || !_sbReady) {
+      _log('Cannot invite $email — no active switchboard session.');
+      return;
+    }
+    _sendSb(MsnpCommands.cal(_nextSbTrId(), email));
+    _log('CAL sent for $email');
+  }
+
+  // ── File transfer methods ──────────────────────────────────────────────
+
+  /// Initiates a file transfer to [to] by sending an MSNSLP INVITE.
+  /// Returns the session ID assigned to this transfer.
+  int sendFileTransferInvite({
+    required String to,
+    required String fileName,
+    required int fileSize,
+  }) {
+    final result = _fileTransferService.buildFileTransferInvite(
+      contactEmail: to,
+      myEmail: _email,
+      fileName: fileName,
+      fileSize: fileSize,
+    );
+    final mimeHeaders = 'MIME-Version: 1.0\r\n'
+        'Content-Type: application/x-msnmsgrp2p\r\n'
+        'P2P-Dest: $to\r\n'
+        'P2P-Src: $_email\r\n\r\n';
+    final payload = <int>[
+      ...utf8.encode(mimeHeaders),
+      ...result.bytes,
+    ];
+    _sendToSwitchboard(
+      to: to,
+      payloadBytes: payload,
+      debugLabel: 'File INVITE → $to: $fileName ($fileSize bytes)',
+      msgFlag: 'D',
+      fallbackToNotificationServer: false,
+    );
+    _log('File transfer INVITE sent to $to for $fileName (session=${result.session.sessionId})');
+    return result.session.sessionId;
+  }
+
+  /// Sends the actual file data in P2P chunks after receiving a 200 OK.
+  Future<void> sendFileData({
+    required int sessionId,
+    required Uint8List fileBytes,
+    required String to,
+  }) async {
+    final normalizedTo = to.trim().toLowerCase();
+    final ftSession = _fileTransferService.getSession(sessionId);
+
+    // Use consecutive baseIds (like the avatar transfer flow).
+    final baseId = Random().nextInt(0x7fffffff);
+    final prepBaseId = baseId;
+    final dataBaseId = baseId + 1;
+    final byeBaseId  = baseId + 2;
+
+    // ── Data-prep packet ────────────────────────────────────────────
+    // WLM 2009 expects a 4-byte data-preparation frame before the
+    // actual file data, just like for avatar transfers.
+    final prepPayload = _slpService.buildDataPrepPacket(
+      sessionId: sessionId,
+      baseId: prepBaseId,
+      footer: 2, // AppID 2 = file transfer
+    );
+    final mimePrep = 'MIME-Version: 1.0\r\n'
+        'Content-Type: application/x-msnmsgrp2p\r\n'
+        'P2P-Dest: $to\r\n'
+        'P2P-Src: $_email\r\n\r\n';
+    // Queue the data-prep to trigger SB connection if needed.
+    _sendToSwitchboard(
+      to: to,
+      payloadBytes: [...utf8.encode(mimePrep), ...prepPayload],
+      debugLabel: 'File data-prep → $to session=$sessionId',
+      msgFlag: 'D',
+      fallbackToNotificationServer: false,
+    );
+    _log('Queued file data-prep for session=$sessionId');
+
+    // Wait for switchboard to connect and flush the data-prep.
+    for (var i = 0; i < 300; i++) {
+      if (_sbReady && _sbSocket != null && _sbContactEmail == normalizedTo) break;
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    if (!_sbReady || _sbSocket == null || _sbContactEmail != normalizedTo) {
+      _log('SB not ready after 30s for file transfer session=$sessionId — aborting');
+      _eventController.add(MsnpEvent(
+        type: MsnpEventType.system,
+        command: 'FTFAILED',
+        from: normalizedTo,
+        body: '$sessionId',
+      ));
+      return;
+    }
+
+    // Wait for peer to process the data-prep.
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+
+    // ── Send file data chunks directly (not via queue) ──────────────
+    // Sending directly via _sendSbMsgPayload avoids all chunks being
+    // queued and flushed at once by _flushSbQueue, ensuring the 10 ms
+    // inter-chunk delay is honoured.
+    for (final chunk in _fileTransferService.chunkFileForSending(
+      sessionId: sessionId,
+      fileBytes: fileBytes,
+      baseId: dataBaseId,
+    )) {
+      if (!_sbReady || _sbSocket == null) {
+        _log('SB lost during file transfer session=$sessionId — aborting');
+        _eventController.add(MsnpEvent(
+          type: MsnpEventType.system,
+          command: 'FTFAILED',
+          from: normalizedTo,
+          body: '$sessionId',
+        ));
+        return;
+      }
+      final mimeHeaders = 'MIME-Version: 1.0\r\n'
+          'Content-Type: application/x-msnmsgrp2p\r\n'
+          'P2P-Dest: $to\r\n'
+          'P2P-Src: $_email\r\n\r\n';
+      _sendSbMsgPayload(
+        [...utf8.encode(mimeHeaders), ...chunk],
+        msgFlag: 'D',
+      );
+      // Yield between chunks so chat messages can interleave.
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    _log('File data fully sent for session=$sessionId (${fileBytes.length} bytes)');
+
+    // ── Wait for peer's data-complete ACK, then send BYE ────────────
+    // WLM 2009's P2P state machine requires the sender to close the
+    // session with a BYE after all data has been transferred.  We wait
+    // for the peer's data-complete ACK (Flags=0x02) before sending BYE
+    // so WLM has processed all chunks before we signal completion.
+    final ackCompleter = Completer<void>();
+    _ftDataAckCompleters[sessionId] = ackCompleter;
+    try {
+      await ackCompleter.future.timeout(const Duration(seconds: 10));
+      _log('Data-complete ACK received for session=$sessionId — sending BYE');
+    } catch (_) {
+      _log('Timed out waiting for data-complete ACK session=$sessionId — sending BYE anyway');
+    }
+    _ftDataAckCompleters.remove(sessionId);
+
+    if (_sbReady && _sbSocket != null && ftSession != null) {
+      final byeSlp = [
+        'BYE MSNMSGR:$normalizedTo MSNSLP/1.0',
+        'To: <msnmsgr:$normalizedTo>',
+        'From: <msnmsgr:$_email>',
+        'Via: MSNSLP/1.0/TLP ;branch=${ftSession.branchId}',
+        'CSeq: 0',
+        'Call-ID: ${ftSession.callId}',
+        'Max-Forwards: 0',
+        'Content-Type: application/x-msnmsgr-sessionclosebody',
+        'Content-Length: 0',
+        '',
+        '',
+      ].join('\r\n');
+      final byePayload = _slpService.buildP2pPayload(0, byeBaseId, 0, byeSlp);
+      final mimeBye = 'MIME-Version: 1.0\r\n'
+          'Content-Type: application/x-msnmsgrp2p\r\n'
+          'P2P-Dest: $normalizedTo\r\n'
+          'P2P-Src: $_email\r\n\r\n';
+      _sendSbMsgPayload(
+        [...utf8.encode(mimeBye), ...byePayload],
+        debugLabel: 'File BYE → $normalizedTo session=$sessionId',
+        msgFlag: 'D',
+      );
+      _log('Sent file transfer BYE to $normalizedTo session=$sessionId');
+    }
+
+    // Clean up the outbound session — it's done.
+    _fileTransferService.removeSession(sessionId);
+
+    // Notify UI that outbound transfer completed.
+    _eventController.add(MsnpEvent(
+      type: MsnpEventType.system,
+      command: 'FTCOMPLETE',
+      from: normalizedTo,
+      body: '$sessionId',
+    ));
+  }
+
+  /// Accept an incoming file transfer (send 200 OK).
+  void acceptFileTransfer({required int sessionId, required String from}) {
+    final acceptBytes = _fileTransferService.buildAcceptResponse(
+      sessionId: sessionId,
+      myEmail: _email,
+      peerEmail: from,
+    );
+    if (acceptBytes.isEmpty) return;
+    final mimeHeaders = 'MIME-Version: 1.0\r\n'
+        'Content-Type: application/x-msnmsgrp2p\r\n'
+        'P2P-Dest: $from\r\n'
+        'P2P-Src: $_email\r\n\r\n';
+    final payload = <int>[
+      ...utf8.encode(mimeHeaders),
+      ...acceptBytes,
+    ];
+    _sendToSwitchboard(
+      to: from,
+      payloadBytes: payload,
+      debugLabel: 'File 200 OK → $from session=$sessionId',
+      msgFlag: 'D',
+      fallbackToNotificationServer: false,
+    );
+    _log('File transfer accepted: session=$sessionId from=$from');
+  }
+
+  /// Decline an incoming file transfer (send 603 Decline).
+  void declineFileTransfer({required int sessionId, required String from}) {
+    final declineBytes = _fileTransferService.buildDeclineResponse(
+      sessionId: sessionId,
+      myEmail: _email,
+      peerEmail: from,
+    );
+    if (declineBytes.isEmpty) return;
+    final mimeHeaders = 'MIME-Version: 1.0\r\n'
+        'Content-Type: application/x-msnmsgrp2p\r\n'
+        'P2P-Dest: $from\r\n'
+        'P2P-Src: $_email\r\n\r\n';
+    final payload = <int>[
+      ...utf8.encode(mimeHeaders),
+      ...declineBytes,
+    ];
+    _sendToSwitchboard(
+      to: from,
+      payloadBytes: payload,
+      debugLabel: 'File 603 Decline → $from session=$sessionId',
+      msgFlag: 'D',
+      fallbackToNotificationServer: false,
+    );
+    _log('File transfer declined: session=$sessionId from=$from');
+  }
+
   Future<void> disconnect() async {
     _stopKeepAlive();
+    _stopSbQueueWatchdog();
     await _disconnectSwitchboard();
     if (_socket != null) {
       _send(MsnpCommands.out());
@@ -415,10 +876,12 @@ class MsnpClient {
 
   void dispose() {
     _stopKeepAlive();
+    _stopSbQueueWatchdog();
     unawaited(_disconnectSwitchboard());
     _socket?.destroy();
     _eventController.close();
     _statusController.close();
+    _fileTransferService.dispose();
   }
 
   int _nextTrId() {
@@ -477,19 +940,39 @@ class MsnpClient {
       return;
     }
 
-    _sbOutboundQueue.add(
-      _PendingOutboundMessage(
-        to: normalizedTo,
-        payloadBytes: payloadBytes,
-        debugLabel: debugLabel,
-        msgFlag: msgFlag,
-        fallbackToNotificationServer: fallbackToNotificationServer,
-      ),
+    final msg = _PendingOutboundMessage(
+      to: normalizedTo,
+      payloadBytes: payloadBytes,
+      debugLabel: debugLabel,
+      msgFlag: msgFlag,
+      fallbackToNotificationServer: fallbackToNotificationServer,
     );
-    _ensureOutboundSwitchboard(normalizedTo);
+
+    // Chat messages (non-'D') get priority over binary P2P data to avoid
+    // noticeable input lag when a large file or avatar transfer is in
+    // progress.  Insert them before the first P2P-flagged entry.
+    if (msgFlag.toUpperCase() != 'D') {
+      final firstP2p = _sbOutboundQueue.indexWhere(
+        (m) => m.msgFlag.toUpperCase() == 'D',
+      );
+      if (firstP2p >= 0) {
+        _sbOutboundQueue.insert(firstP2p, msg);
+      } else {
+        _sbOutboundQueue.add(msg);
+      }
+    } else {
+      _sbOutboundQueue.add(msg);
+    }
+    _ensureOutboundSwitchboard(
+      normalizedTo,
+      bypassP2pLock: msgFlag != 'D',
+    );
   }
 
-  void _ensureOutboundSwitchboard(String recipient) {
+  void _ensureOutboundSwitchboard(
+    String recipient, {
+    bool bypassP2pLock = false,
+  }) {
     if (_sbConnecting || _sbAwaitingXfr) {
       return;
     }
@@ -502,7 +985,9 @@ class MsnpClient {
     // different contact.  The 200 OK (and subsequent data) still needs to
     // arrive on that socket.  The request will be retried automatically when
     // the current transfer ends via _tryNextPendingAvatar().
-    if (_sbP2pInFlightEmail != null && _sbP2pInFlightEmail != recipient) {
+    if (!bypassP2pLock &&
+        _sbP2pInFlightEmail != null &&
+        _sbP2pInFlightEmail != recipient) {
       _log('P2P in-flight for $_sbP2pInFlightEmail — deferring SB request for $recipient');
       return;
     }
@@ -517,7 +1002,7 @@ class MsnpClient {
     _sbPendingRecipient = recipient;
     _sbAwaitingXfr = true;
     _sbXfrTimeout?.cancel();
-    _sbXfrTimeout = Timer(const Duration(seconds: 8), () {
+    _sbXfrTimeout = Timer(const Duration(seconds: 15), () {
       _log('XFR response timeout for $recipient — resetting.');
       _sbAwaitingXfr = false;
       _pendingXfrRequests.removeWhere((_, v) => v == recipient);
@@ -717,7 +1202,7 @@ class MsnpClient {
       if (email.contains('@')) {
         _rememberContact(
           email: email,
-          displayName: email.split('@').first,
+          displayName: email,
           status: PresenceStatus.online,
         );
         _eventController.add(
@@ -740,7 +1225,7 @@ class MsnpClient {
       if (email.contains('@')) {
         _rememberContact(
           email: email,
-          displayName: email.split('@').first,
+          displayName: email,
           status: PresenceStatus.online,
         );
         _eventController.add(
@@ -782,7 +1267,7 @@ class MsnpClient {
       if (who.contains('@')) {
         _rememberContact(
           email: who,
-          displayName: who.split('@').first,
+          displayName: who,
           status: PresenceStatus.appearOffline,
         );
         _eventController.add(
@@ -805,7 +1290,7 @@ class MsnpClient {
     if (from.contains('@')) {
       _rememberContact(
         email: from,
-        displayName: from.split('@').first,
+        displayName: from,
         status: PresenceStatus.online,
       );
       _eventController.add(
@@ -820,7 +1305,8 @@ class MsnpClient {
       if (frameInfo != null) {
         // Mask off WLM high bit early so we can decide what to log.
         final lowFlags = frameInfo.flags & 0x00FFFFFF;
-        final isDataChunk = (lowFlags & 0x20) != 0 || (lowFlags & 0x40) != 0;
+        final isDataChunk = (lowFlags & 0x20) != 0;
+        final isCloseSubStream = (lowFlags & 0x40) != 0 && !isDataChunk;
 
         // For data chunks, don't dump binary slpText (it's raw image bytes).
         print(
@@ -828,7 +1314,7 @@ class MsnpClient {
           'BaseID=${frameInfo.baseId} Flags=0x${frameInfo.flags.toRadixString(16)} '
           'Offset=${frameInfo.offset} MsgSize=${frameInfo.messageSize} '
           'TotalSize=${frameInfo.totalSize}'
-          '${isDataChunk ? '' : '\n${frameInfo.slpText}'}',
+          '${(isDataChunk || isCloseSubStream) ? '' : '\n${frameInfo.slpText}'}',
         );
 
         // ── ACK logic ────────────────────────────────────────────────────────
@@ -840,6 +1326,17 @@ class MsnpClient {
         // We do NOT ACK: 0x02 (ACK), 0x04 (control), data chunks.
         final shouldAck = !isDataChunk &&
             (lowFlags == 0x00 || lowFlags == 0x01);
+
+        // Log file transfer data-prep receipt for diagnostics.
+        if (shouldAck &&
+            frameInfo.sessionId != 0 &&
+            frameInfo.messageSize == 4 &&
+            frameInfo.totalSize == 4) {
+          final ftSess = _fileTransferService.getSession(frameInfo.sessionId);
+          print('[FT] Data-prep received from $from session=${frameInfo.sessionId}'
+              ' ftSession=${ftSess != null ? 'found' : 'NOT FOUND'}');
+        }
+
         if (shouldAck && frameInfo.messageSize > 0) {
           final ackBytes = _slpService.buildAckBinary(
             incomingSessionId: frameInfo.sessionId,
@@ -866,27 +1363,94 @@ class MsnpClient {
         // ── Route by Flags ───────────────────────────────────────────────────
         final slp = frameInfo.slpText;
         // Only log SLP text for non-data frames (data chunks are binary noise).
-        if (slp.isNotEmpty && !isDataChunk) {
+        if (slp.isNotEmpty && !isDataChunk && !isCloseSubStream) {
           print('[MSNSLP][RX] SLP text from $from:\n$slp');
         }
 
         // Flags=0x02 means the peer acknowledged our INVITE transport packet.
-        if (frameInfo.flags == 0x02) {
+        // Use lowFlags to tolerate WLM's high-bit (0x1000000).
+        if (lowFlags == 0x02) {
           _p2pSessionManager.updateStatus(from, 'P2P: Peer acknowledged INVITE — waiting for 200 OK');
+          // Complete any pending data-complete ACK waiter for file transfers.
+          final completer = _ftDataAckCompleters.remove(frameInfo.sessionId);
+          if (completer != null && !completer.isCompleted) {
+            print('[FT] Data-complete ACK received for session=${frameInfo.sessionId}');
+            completer.complete();
+          }
+        }
+
+        // Flags=0x04 is a NAK — log which message the peer is NAK-ing.
+        if ((lowFlags & 0x04) != 0) {
+          print('[MSNSLP][NAK] from=$from Flags=0x${frameInfo.flags.toRadixString(16)} '
+              'AckSess=${frameInfo.ackSessionId} AckBaseId=${frameInfo.ackUniqueId} '
+              'Session=${frameInfo.sessionId} BaseID=${frameInfo.baseId}');
+        }
+
+        // Flags=0x40 = close sub-stream (P2P session close from peer).
+        // ACK it so the peer knows we received the close signal.
+        if (isCloseSubStream) {
+          print('[MSNSLP] Close sub-stream (0x40) from $from session=${frameInfo.sessionId}');
+          final ackBytes = _slpService.buildAckBinary(
+            incomingSessionId: frameInfo.sessionId,
+            incomingBaseId: frameInfo.baseId,
+            ackedTotalSize: frameInfo.totalSize,
+          );
+          final mimeHeaders = 'MIME-Version: 1.0\r\n'
+              'Content-Type: application/x-msnmsgrp2p\r\n'
+              'P2P-Dest: $from\r\n'
+              'P2P-Src: $_email\r\n\r\n';
+          _sendSbMsgPayload(
+            [...utf8.encode(mimeHeaders), ...ackBytes],
+            debugLabel: 'ACK close sub-stream session=${frameInfo.sessionId}',
+            msgFlag: 'D',
+          );
+          print('[MSNSLP][TX] ACK close sub-stream → $from session=${frameInfo.sessionId}');
         }
 
         if (isDataChunk) {
-          // Data chunk — feed into session manager for reassembly.
-          // rawP2pBytes = everything after the MIME header separator.
+          // Data chunk — route to the correct session manager.
           final split = _splitP2pBody(payloadBytes);
-          unawaited(_p2pSessionManager.handleDataChunk(
-            sessionId: frameInfo.sessionId,
-            offset: frameInfo.offset,
-            messageSize: frameInfo.messageSize,
-            totalSize: frameInfo.totalSize,
-            peerEmail: from,
-            rawP2pBytes: split,
-          ));
+
+          // Check if this session belongs to a file transfer
+          final ftSession = _fileTransferService.getSession(frameInfo.sessionId);
+          if (ftSession != null) {
+            print('[FT] Data chunk: session=${frameInfo.sessionId} '
+                'offset=${frameInfo.offset} msgSize=${frameInfo.messageSize} '
+                'total=${frameInfo.totalSize} '
+                'progress=${ftSession.bytesTransferred}/${ftSession.fileSize}');
+            unawaited(_fileTransferService.handleDataChunk(
+              sessionId: frameInfo.sessionId,
+              offset: frameInfo.offset,
+              messageSize: frameInfo.messageSize,
+              totalSize: frameInfo.totalSize,
+              rawP2pBytes: split,
+            ));
+          } else {
+            // Default: avatar P2P session
+            unawaited(_p2pSessionManager.handleDataChunk(
+              sessionId: frameInfo.sessionId,
+              offset: frameInfo.offset,
+              messageSize: frameInfo.messageSize,
+              totalSize: frameInfo.totalSize,
+              peerEmail: from,
+              rawP2pBytes: split,
+            ));
+            // Reset stall timer – data is still flowing.
+            final normFrom = from.toLowerCase().trim();
+            final existingTimer = _avatarStallTimers[normFrom];
+            if (existingTimer != null) {
+              existingTimer.cancel();
+              final stallSessionId = frameInfo.sessionId;
+              _avatarStallTimers[normFrom] = Timer(const Duration(seconds: 8), () {
+                _log('Avatar P2P stall for $normFrom – aborting');
+                _avatarStallTimers.remove(normFrom);
+                // Close the leaked P2P session so the buffer doesn't linger.
+                _p2pSessionManager.closeSession(stallSessionId);
+                _clearP2pInFlight(normFrom);
+                _markAvatarFetchFailed(normFrom, reason: 'data stall timeout');
+              });
+            }
+          }
 
           // Send a single ACK only after the LAST data chunk completes the
           // transfer.  In P2P v1 individual chunks are NOT acked — only the
@@ -962,7 +1526,18 @@ class MsnpClient {
             }
 
             // Open the reassembly buffer now that we know the total size.
-            if (sessId > 0) {
+            // But first check if this belongs to an outbound file transfer —
+            // if so, the peer accepted our file and we should start sending data.
+            final ftSession = _fileTransferService.getSession(sessId);
+            if (ftSession != null && ftSession.isOutgoing) {
+              print('[MSNSLP] File transfer 200 OK for session $sessId — peer accepted');
+              _eventController.add(MsnpEvent(
+                type: MsnpEventType.system,
+                command: 'FTACCEPTED',
+                from: from,
+                body: '$sessId',
+              ));
+            } else if (sessId > 0) {
               _p2pSessionManager.openSession(
                 sessionId: sessId,
                 peerEmail: from,
@@ -979,6 +1554,22 @@ class MsnpClient {
           // The peer is sending us an INVITE — most commonly a transport
           // negotiation request (transreqbody) or a session request for our DP.
           _handleIncomingSlpInvite(from, slp);
+        } else if (slp.startsWith('BYE ')) {
+          // Peer is closing a P2P session.
+          final byeCallId = _extractSlpHeader(slp, 'Call-ID') ?? '';
+          print('[MSNSLP] BYE from $from callId=$byeCallId');
+          final ftSession = _fileTransferService.getSessionByCallId(byeCallId);
+          if (ftSession != null) {
+            if (ftSession.isOutgoing) {
+              // The RECEIVER sent BYE — this is the normal close signal for
+              // file transfers. ACK the BYE and clean up.
+              print('[MSNSLP] Outbound file transfer session ${ftSession.sessionId} '
+                  'closed by receiver BYE — transfer successful');
+            } else if (ftSession.isComplete) {
+              print('[MSNSLP] Inbound file transfer session ${ftSession.sessionId} '
+                  'closed by peer BYE');
+            }
+          }
         }
       } else {
         print('[MSNSLP][RX] unparseable frame\n$payload');
@@ -1037,27 +1628,39 @@ class MsnpClient {
       return;
     }
 
-    // Defer the RNG if the P2P avatar pipeline is busy.  Accepting now would
-    // tear down the in-flight transfer SB.
+    // RNG is an incoming switchboard request from a peer (e.g. to request our
+    // avatar or send us messages).  We should accept it even if we have an
+    // outbound avatar fetch pending — the outbound fetch can be retried later,
+    // but the peer will give up if we never accept the RNG.
     if (_sbP2pInFlightEmail != null ||
         _sbAwaitingXfr ||
         _sbIsSilentAvatarSession) {
-      _log('Deferring RNG from ${parts[5]} — avatar pipeline busy.');
-      _deferredRngLines.add(line);
-      // Still remember the contact so the contact list updates.
-      final contactEmail = parts[5].toLowerCase();
-      _rememberContact(
-        email: contactEmail,
-        displayName: contactEmail.split('@').first,
-        status: PresenceStatus.online,
-      );
-      _eventController.add(
-        const MsnpEvent(
-          type: MsnpEventType.system,
-          command: 'SBPRES',
-        ),
-      );
-      return;
+      _log('Accepting RNG from ${parts[5]} — cancelling outbound avatar pipeline.');
+      // Abort whatever the avatar pipeline was doing.
+      final inFlight = _sbP2pInFlightEmail;
+      if (inFlight != null) {
+        _clearP2pInFlight(inFlight);
+      }
+      _sbAwaitingXfr = false;
+      _sbXfrTimeout?.cancel();
+      _sbXfrTimeout = null;
+      _sbIsSilentAvatarSession = false;
+      _cancelSbJoinTimeout();
+      // Tear down the existing SB so _connectSwitchboard can start fresh.
+      _handledAvatarSessionIds.clear();
+      _sbSocket?.destroy();
+      _sbSocket = null;
+      _sbReady = false;
+      _sbConnecting = false;
+      _sbAuthToken = null;
+      _sbHost = null;
+      _sbPort = null;
+      _sbSessionId = null;
+      _sbContactEmail = null;
+      _sbPendingRecipient = null;
+      _sbPendingFrame = null;
+      _sbRxBuffer.clear();
+      _deferredRngLines.clear();
     }
 
     final sessionId = parts[1];
@@ -1066,7 +1669,7 @@ class MsnpClient {
     final contactEmail = parts[5].toLowerCase();
     _rememberContact(
       email: contactEmail,
-      displayName: contactEmail.split('@').first,
+      displayName: contactEmail,
       status: PresenceStatus.online,
     );
     _eventController.add(
@@ -1162,12 +1765,21 @@ class MsnpClient {
   void _onSbDone() {
     _log('Switchboard socket closed by remote endpoint.');
     _cancelSbJoinTimeout();
+    _handledAvatarSessionIds.clear();
     final closedEmail = _sbContactEmail;
     _sbSocket = null;
     _sbPendingFrame = null;
     _sbRxBuffer.clear();
     _sbReady = false;
     _sbConnecting = false;
+    _sbIsSilentAvatarSession = false;
+    _sbIsInviteMode = false;
+
+    // Immediately fail any active incoming file transfers on this SB.
+    if (closedEmail != null) {
+      _fileTransferService.failActiveSessionsForPeer(closedEmail);
+    }
+
     // If the SB that just closed was carrying a P2P transfer, mark it as
     // failed so the in-flight lock is released and the next one can start.
     if (closedEmail != null && _sbP2pInFlightEmail == closedEmail) {
@@ -1185,12 +1797,21 @@ class MsnpClient {
   void _onSbError(Object error, StackTrace stackTrace) {
     _log('Switchboard socket error: $error');
     _cancelSbJoinTimeout();
+    _handledAvatarSessionIds.clear();
     final closedEmail = _sbContactEmail;
     _sbSocket = null;
     _sbPendingFrame = null;
     _sbRxBuffer.clear();
     _sbReady = false;
     _sbConnecting = false;
+    _sbIsSilentAvatarSession = false;
+    _sbIsInviteMode = false;
+
+    // Immediately fail any active incoming file transfers on this SB.
+    if (closedEmail != null) {
+      _fileTransferService.failActiveSessionsForPeer(closedEmail);
+    }
+
     // Release the P2P in-flight lock so the pipeline doesn't deadlock.
     if (closedEmail != null && _sbP2pInFlightEmail == closedEmail) {
       _log('SB error while P2P in-flight for $closedEmail — releasing lock.');
@@ -1204,7 +1825,7 @@ class MsnpClient {
   void _startSbJoinTimeout(String contactEmail) {
     _cancelSbJoinTimeout();
     _sbJoinTimeoutContact = contactEmail.trim().toLowerCase();
-    _sbJoinTimeoutTimer = Timer(const Duration(seconds: 6), _onSbJoinTimeout);
+    _sbJoinTimeoutTimer = Timer(const Duration(seconds: 10), _onSbJoinTimeout);
   }
 
   void _cancelSbJoinTimeout() {
@@ -1222,7 +1843,7 @@ class MsnpClient {
 
     _markAvatarFetchFailed(
       failedContact,
-      reason: 'Silent switchboard JOI timeout (no JOI after CAL in 6s)',
+      reason: 'Silent switchboard JOI timeout (no JOI after CAL in 10s)',
       closeSwitchboard: true,
     );
   }
@@ -1284,6 +1905,8 @@ class MsnpClient {
       _sbP2pResponseTimeout?.cancel();
       _sbP2pResponseTimeout = null;
       _sbP2pInFlightEmail = null;
+      _avatarStallTimers[email]?.cancel();
+      _avatarStallTimers.remove(email);
       _log('P2P in-flight lock released for $email');
     }
   }
@@ -1333,7 +1956,7 @@ class MsnpClient {
   }
 
   /// Called by [_p2pSessionManager] when a display picture is fully reassembled.
-  void _onP2pAvatarReady(String peerEmail, String filePath) {
+  void _onP2pAvatarReady(String peerEmail, String filePath, {String? sha1d}) {
     final normalized = peerEmail.trim().toLowerCase();
     _log('P2P avatar ready for $normalized → $filePath');
     // Release the in-flight lock so the next queued contact can start.
@@ -1343,13 +1966,14 @@ class MsnpClient {
     // Keep _avatarInviteSent so the same sha1d is NOT re-fetched.
     // Also remove this contact from the pending queue to prevent re-INVITE.
     _avatarInvitePending.remove(normalized);
+    final sha = sha1d ?? '';
     _eventController.add(
       MsnpEvent(
         type: MsnpEventType.system,
         command: 'AVOK',
         from: normalized,
-        body: filePath,
-        raw: 'AVOK $normalized $filePath',
+        body: '$filePath\n$sha',
+        raw: 'AVOK $normalized $filePath $sha',
       ),
     );
     // Tear down the old SB immediately so the next XFR can start without
@@ -1526,6 +2150,7 @@ class MsnpClient {
       final currentMedia = _extractXmlTag(payload, 'CurrentMedia');
       final scene = _extractXmlTagAllowEmpty(payload, 'Scene');
       final colorScheme = _extractXmlTagAllowEmpty(payload, 'ColorScheme');
+      final rawDdp = _extractXmlTagAllowEmpty(payload, 'DDP');
       final from = frame.from?.toLowerCase();
       if (from != null && from.isNotEmpty) {
         String? psm;
@@ -1537,6 +2162,30 @@ class MsnpClient {
           }
         }
         final media = _parseCurrentMedia(currentMedia);
+
+        // Parse DDP (Dynamic Display Picture) MSN Object if present.
+        String? ddpMsnObject;
+        String? ddpSha1d;
+        if (rawDdp != null && rawDdp.isNotEmpty) {
+          // UBX encodes XML entities: &#x3C; = <, &#x3D; = =, &#x3E; = >, etc.
+          ddpMsnObject = rawDdp
+              .replaceAll('&#x3C;', '<')
+              .replaceAll('&#x3E;', '>')
+              .replaceAll('&#x3D;', '=')
+              .replaceAll('&#x22;', '"')
+              .replaceAll('&lt;', '<')
+              .replaceAll('&gt;', '>')
+              .replaceAll('&amp;', '&')
+              .replaceAll('&quot;', '"');
+          ddpSha1d = _extractMsnObjectAttr(ddpMsnObject, 'SHA1D');
+          if (ddpSha1d != null && ddpSha1d.isNotEmpty) {
+            _log('[DDP] UBX from $from has DDP sha1d=$ddpSha1d');
+          } else {
+            ddpMsnObject = null;
+            ddpSha1d = null;
+          }
+        }
+
         // Directly update the snapshot entry so that null values *clear*
         // stale personalMessage / nowPlaying instead of being preserved by
         // copyWith's null-fallback behaviour.
@@ -1554,12 +2203,31 @@ class MsnpClient {
             avatarMsnObject: existing.avatarMsnObject,
             avatarCreator: existing.avatarCreator,
             avatarSha1d: existing.avatarSha1d,
+            ddpMsnObject: ddpMsnObject ?? existing.ddpMsnObject,
+            ddpSha1d: ddpSha1d ?? existing.ddpSha1d,
             scene: scene ?? existing.scene,
             colorScheme: colorScheme ?? existing.colorScheme,
           );
         } else {
-          _rememberContact(email: from, personalMessage: psm, nowPlaying: media);
+          _rememberContact(
+            email: from,
+            personalMessage: psm,
+            nowPlaying: media,
+            scene: scene,
+            colorScheme: colorScheme,
+          );
         }
+
+        // If DDP sha1d was received, queue a fetch for the dynamic picture.
+        if (ddpSha1d != null && ddpSha1d.isNotEmpty && ddpMsnObject != null) {
+          _queueAvatarInvite(
+            contactEmail: from,
+            avatarSha1d: ddpSha1d,
+            fullMsnObjectXml: ddpMsnObject,
+            eagerBackground: true,
+          );
+        }
+
         if (scene != null || colorScheme != null) {
           print('[MSNP] UBX from $from: scene=${scene ?? "(absent)"}, '
               'colorScheme=${colorScheme ?? "(absent)"}');
@@ -1788,11 +2456,16 @@ class MsnpClient {
     }
     _sentPostAuthBootstrap = true;
 
-    _send('CHG ${_nextTrId()} NLN ${MsnpCommands.wlm2009Capabilities}\r\n');
+    _send(MsnpCommands.chg(
+      _nextTrId(),
+      presenceToMsnp(_selfPresence),
+      capabilities: MsnpCommands.wlm2009Capabilities,
+      msnObject: _encodedSelfMsnObject,
+    ));
     _send(MsnpCommands.blp(_nextTrId(), 'AL'));
     _send(MsnpCommands.adlEmpty(_nextTrId()));
     _sendUux();
-    _log('Post-auth bootstrap commands sent (CHG/BLP/UUX) using legacy capabilities.');
+    _log('Post-auth bootstrap commands sent (CHG/BLP/UUX) with avatar=${_selfAvatarMsnObject != null ? "set" : "none"}.');
   }
 
   void _retryContactSyncRequest() {
@@ -1924,6 +2597,33 @@ class MsnpClient {
   void _stopKeepAlive() {
     _keepAliveTimer?.cancel();
     _keepAliveTimer = null;
+  }
+
+  /// Periodically checks if outbound text messages are stuck in the SB queue.
+  /// If messages have been waiting > 10 seconds while P2P is in-flight, force
+  /// a new SB session by temporarily clearing the P2P guard.
+  void _startSbQueueWatchdog() {
+    _sbQueueWatchdog?.cancel();
+    _sbQueueWatchdog = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_sbOutboundQueue.isEmpty || _socket == null) return;
+      // Only check text messages (not P2P data frames which have msgFlag 'D')
+      final hasStuckText = _sbOutboundQueue.any(
+        (m) => m.fallbackToNotificationServer && m.msgFlag != 'D',
+      );
+      if (!hasStuckText) return;
+      // If not currently connecting/awaiting XFR, kick a new SB request
+      if (!_sbConnecting && !_sbAwaitingXfr) {
+        final firstText = _sbOutboundQueue.firstWhere(
+          (m) => m.fallbackToNotificationServer && m.msgFlag != 'D',
+        );
+        _ensureOutboundSwitchboard(firstText.to, bypassP2pLock: true);
+      }
+    });
+  }
+
+  void _stopSbQueueWatchdog() {
+    _sbQueueWatchdog?.cancel();
+    _sbQueueWatchdog = null;
   }
 
   void _updateKeepAliveIntervalFromQng(String line) {
@@ -2110,7 +2810,7 @@ class MsnpClient {
       _rememberContact(
         email: event.from!,
         displayName: (event.body == null || event.body!.isEmpty)
-            ? event.from!.split('@').first
+            ? event.from!
             : event.body!,
         status: event.presence ?? PresenceStatus.online,
       );
@@ -2121,7 +2821,7 @@ class MsnpClient {
       _rememberContact(
         email: event.from!,
         displayName: (event.body == null || event.body!.isEmpty)
-            ? event.from!.split('@').first
+            ? event.from!
             : event.body!,
         status: PresenceStatus.appearOffline,
       );
@@ -2137,6 +2837,8 @@ class MsnpClient {
     String? avatarMsnObject,
     String? avatarCreator,
     String? avatarSha1d,
+    String? scene,
+    String? colorScheme,
   }) {
     final normalizedEmail = email.trim().toLowerCase();
     if (normalizedEmail.isEmpty || normalizedEmail == _email.toLowerCase()) {
@@ -2148,7 +2850,7 @@ class MsnpClient {
       _knownContacts[normalizedEmail] = _KnownContact(
         email: normalizedEmail,
         displayName: (displayName == null || displayName.trim().isEmpty)
-            ? normalizedEmail.split('@').first
+            ? normalizedEmail
             : displayName,
         status: status ?? PresenceStatus.appearOffline,
         personalMessage: personalMessage,
@@ -2156,6 +2858,8 @@ class MsnpClient {
         avatarMsnObject: avatarMsnObject,
         avatarCreator: avatarCreator,
         avatarSha1d: avatarSha1d,
+        scene: scene,
+        colorScheme: colorScheme,
       );
       return;
     }
@@ -2164,7 +2868,7 @@ class MsnpClient {
       displayName: _mergeDisplayName(
         existingDisplayName: existing.displayName,
         incomingDisplayName: displayName,
-        emailLocalPart: normalizedEmail.split('@').first,
+        email: normalizedEmail,
       ),
       status: status ?? existing.status,
       personalMessage: personalMessage,
@@ -2172,13 +2876,15 @@ class MsnpClient {
       avatarMsnObject: avatarMsnObject,
       avatarCreator: avatarCreator,
       avatarSha1d: avatarSha1d,
+      scene: scene ?? existing.scene,
+      colorScheme: colorScheme ?? existing.colorScheme,
     );
   }
 
   String _mergeDisplayName({
     required String existingDisplayName,
     required String? incomingDisplayName,
-    required String emailLocalPart,
+    required String email,
   }) {
     if (incomingDisplayName == null || incomingDisplayName.trim().isEmpty) {
       return existingDisplayName;
@@ -2186,11 +2892,16 @@ class MsnpClient {
 
     final next = incomingDisplayName.trim();
     final existing = existingDisplayName.trim();
-    if (existing.isEmpty || existing.toLowerCase() == emailLocalPart.toLowerCase()) {
+    final emailLower = email.toLowerCase();
+    final emailLocalPart = email.split('@').first.toLowerCase();
+    if (existing.isEmpty ||
+        existing.toLowerCase() == emailLower ||
+        existing.toLowerCase() == emailLocalPart) {
       return next;
     }
 
-    if (next.toLowerCase() == emailLocalPart.toLowerCase()) {
+    if (next.toLowerCase() == emailLower ||
+        next.toLowerCase() == emailLocalPart) {
       return existing;
     }
 
@@ -2212,7 +2923,7 @@ class MsnpClient {
     final objIndex = lineWithoutObj.indexOf('%3Cmsnobj');
     if (objIndex != -1) {
       final encodedObj = lineWithoutObj.substring(objIndex).trim();
-      msnObject = Uri.decodeFull(encodedObj.replaceAll('+', ' '));
+      msnObject = Uri.decodeComponent(encodedObj);
       lineWithoutObj = lineWithoutObj.substring(0, objIndex).trimRight();
     }
 
@@ -2246,6 +2957,10 @@ class MsnpClient {
     );
 
     final normalizedEmail = email.trim().toLowerCase();
+    // Contact came (back) online — clear any prior avatar-fetch failure so
+    // the system retries automatically instead of staying permanently blocked.
+    _avatarBackgroundFailed.remove(normalizedEmail);
+
     final normalizedSha1d = (avatarSha1d ?? '').trim();
     final normalizedMsnObj = (msnObject ?? '').trim();
     if (normalizedEmail.isNotEmpty && normalizedSha1d.isNotEmpty && normalizedMsnObj.isNotEmpty) {
@@ -2282,7 +2997,7 @@ class MsnpClient {
 
     _rawSocketAvatarFetch(email: normalized, sha1d: sha).then((path) {
       if (path != null) {
-        _onP2pAvatarReady(normalized, path);
+        _onP2pAvatarReady(normalized, path, sha1d: sha);
       } else {
         _log('HTTP avatar fetch failed for $normalized; emitting AVFAIL.');
         _p2pSessionManager.updateStatus(normalized, 'Avatar: failed');
@@ -2633,6 +3348,7 @@ class MsnpClient {
       branchId: inviteResult.branchId,
       sessionId: inviteResult.sessionId,
       baseId: inviteResult.baseId,
+      sha1d: avatarSha1d,
     );
 
     final mimeHeaders = 'MIME-Version: 1.0\r\n'
@@ -2665,12 +3381,22 @@ class MsnpClient {
     // Lock the SB for this contact until the transfer completes or times out.
     _sbP2pInFlightEmail = normalizedEmail;
     _sbP2pResponseTimeout?.cancel();
-    _sbP2pResponseTimeout = Timer(const Duration(seconds: 8), () {
+    _sbP2pResponseTimeout = Timer(const Duration(seconds: 30), () {
       if (_sbP2pInFlightEmail == normalizedEmail) {
         _log('P2P: 200 OK timeout waiting for $normalizedEmail — giving up.');
         _clearP2pInFlight(normalizedEmail);
         _markAvatarFetchFailed(normalizedEmail, reason: '200 OK timeout');
       }
+    });
+    // Start a 30-second stall timer that fails the transfer if no data arrives.
+    _avatarStallTimers[normalizedEmail]?.cancel();
+    _avatarStallTimers[normalizedEmail] = Timer(const Duration(seconds: 30), () {
+      if (_sbP2pInFlightEmail == normalizedEmail) {
+        _log('P2P: Avatar stall timeout for $normalizedEmail (30s no data).');
+        _clearP2pInFlight(normalizedEmail);
+        _markAvatarFetchFailed(normalizedEmail, reason: 'stall timeout');
+      }
+      _avatarStallTimers.remove(normalizedEmail);
     });
     return true;
   }
@@ -2717,9 +3443,39 @@ class MsnpClient {
           msgFlag: 'D');
       print('[MSNSLP][TX] Transport 200 OK → $from callId=$callId bridge=SBBridge');
     } else if (contentType.contains('sessionreqbody')) {
-      // The peer wants to establish a session TO us (e.g., send us their DP).
-      // For now, send a 603 Decline — we don't accept inbound P2P sessions.
-      final declineText = [
+      // Check if this is a file transfer INVITE.
+      final eufGuid = _extractSlpBodyField(slpText, 'EUF-GUID') ?? '';
+
+      if (eufGuid.toUpperCase().contains('5D3E02AB')) {
+        // ── File transfer INVITE ─────────────────────────────────────
+        // Parse basic INVITE info needed for the frame-level baseId.
+        final frameInfo = _slpService.parseInboundP2pFrame(
+          utf8.encode(slpText),
+        );
+        final baseId = frameInfo?.baseId ?? Random().nextInt(0x7fffffff);
+
+        final ftSession = _fileTransferService.parseIncomingInvite(
+          slpText: slpText,
+          from: from,
+          baseId: baseId,
+        );
+        if (ftSession != null) {
+          print('[MSNSLP] File transfer INVITE from $from: '
+              '${ftSession.fileName} (${ftSession.fileSize} bytes)');
+          // Emit event so the UI can present an accept/decline dialog.
+          _eventController.add(MsnpEvent(
+            type: MsnpEventType.system,
+            command: 'FTINVITE',
+            from: from,
+            body: '${ftSession.sessionId}',
+          ));
+        }
+      } else if (eufGuid.toUpperCase().contains('A4268EEC')) {
+        // ── Display picture (avatar) request ─────────────────────────
+        _handleIncomingAvatarRequest(from, slpText, sessionId, callId, branch);
+      } else {
+        // Unknown session type — decline.
+        final declineText = [
         'MSNSLP/1.0 603 Decline',
         'To: <msnmsgr:$from>',
         'From: <msnmsgr:$_email>',
@@ -2730,7 +3486,7 @@ class MsnpClient {
         'Content-Type: application/x-msnmsgr-sessionreqbody',
         'Content-Length: 0',
         '',
-        '\r\n',
+        '',
       ].join('\r\n');
       final declinePayload = _slpService.buildP2pPayload(0, Random().nextInt(0x7fffffff), 0, declineText);
       final mimeHeaders = 'MIME-Version: 1.0\r\n'
@@ -2745,6 +3501,7 @@ class MsnpClient {
           debugLabel: 'SLP 603 Decline → $from callId=$callId',
           msgFlag: 'D');
       print('[MSNSLP][TX] 603 Decline → $from callId=$callId (inbound session)');
+      }
     } else if (contentType.contains('transrespbody')) {
       // The peer is responding to a transport negotiation — this is a
       // direct-connect offer (TRUDPv1 / TCPv1).  We don't support direct
@@ -2782,6 +3539,222 @@ class MsnpClient {
     }
     final value = (match.group(1) ?? '').trim();
     return value.isEmpty ? null : value;
+  }
+
+  /// Handle an incoming P2P INVITE for our display picture.
+  /// Responds with 200 OK + sends the avatar data in chunks.
+  void _handleIncomingAvatarRequest(
+    String from,
+    String slpText,
+    int sessionId,
+    String callId,
+    String branch,
+  ) {
+    // Dedup: skip if we already started serving this session.
+    if (_handledAvatarSessionIds.contains(sessionId)) {
+      _log('Avatar request from $from sessionId=$sessionId — DUPLICATE, skipping');
+      return;
+    }
+    _handledAvatarSessionIds.add(sessionId);
+    _log('Avatar request from $from sessionId=$sessionId');
+
+    // Use cached avatar path (set in updateSelfAvatarMsnObject) which is
+    // always up-to-date. Falls back to SharedPreferences for robustness.
+    Future<String?> _resolveAvatarPath() async {
+      if (_selfAvatarPath != null && File(_selfAvatarPath!).existsSync()) {
+        return _selfAvatarPath;
+      }
+      return _getLocalAvatarPath();
+    }
+
+    _resolveAvatarPath().then((avatarPath) async {
+      if (avatarPath == null || !File(avatarPath).existsSync()) {
+        _log('No local avatar to serve → declining (path=${avatarPath ?? 'null'})');
+        _sendSlpDecline(from, branch, callId);
+        return;
+      }
+
+      // Read avatar file and verify it's servable
+      final avatarBytes = await File(avatarPath).readAsBytes();
+      if (avatarBytes.isEmpty) {
+        _log('Local avatar file is empty → declining');
+        _sendSlpDecline(from, branch, callId);
+        return;
+      }
+
+      // Log SHA1D of the file we're about to serve for interop diagnostics
+      try {
+        final contextMatch = RegExp(r'Context:\s*(\S+)').firstMatch(slpText);
+        if (contextMatch != null) {
+          _log('Incoming avatar request Context (MSNObject): ${contextMatch.group(1)}');
+        }
+      } catch (_) {}
+
+      // Send 200 OK accepting the session — compute Content-Length dynamically.
+      // NOTE: Do NOT include a trailing \x00 here — buildP2pPayload() already
+      // null-terminates all SLP text on the wire.
+      final sessionBody = 'SessionID: $sessionId\r\n\r\n';
+      final sessionBodyBytes = utf8.encode(sessionBody);
+      final okSlp = [
+        'MSNSLP/1.0 200 OK',
+        'To: <msnmsgr:$from>',
+        'From: <msnmsgr:$_email>',
+        'Via: MSNSLP/1.0/TLP ;branch=$branch',
+        'CSeq: 1',
+        'Call-ID: $callId',
+        'Max-Forwards: 0',
+        'Content-Type: application/x-msnmsgr-sessionreqbody',
+        'Content-Length: ${sessionBodyBytes.length}',
+        '',
+        sessionBody,
+      ].join('\r\n');
+
+      final baseId = Random().nextInt(0x7fffffff);
+      final prepBaseId = baseId + 1;
+      final dataBaseId = baseId + 2;
+      final byeBaseId  = baseId + 3;
+      final okPayload = _slpService.buildP2pPayload(0, baseId, 0, okSlp);
+      final mimeOk = 'MIME-Version: 1.0\r\n'
+          'Content-Type: application/x-msnmsgrp2p\r\n'
+          'P2P-Dest: $from\r\n'
+          'P2P-Src: $_email\r\n\r\n';
+      _sendSbMsgPayload(
+        [...utf8.encode(mimeOk), ...okPayload],
+        debugLabel: 'Avatar 200 OK → $from session=$sessionId',
+        msgFlag: 'D',
+      );
+      _log('Sent avatar 200 OK to $from');
+
+      // ── Data-prep packet ──────────────────────────────────────────
+      // WLM 2009 requires a 4-byte data-preparation frame between the
+      // 200 OK and the actual image data.  Without it the peer times
+      // out (~90 s) and cancels the session with Flags=0x04.
+      final dataPrepPayload = _slpService.buildDataPrepPacket(
+        sessionId: sessionId,
+        baseId: prepBaseId,
+        footer: 1, // AppID 1 = display picture
+      );
+      final mimePrep = 'MIME-Version: 1.0\r\n'
+          'Content-Type: application/x-msnmsgrp2p\r\n'
+          'P2P-Dest: $from\r\n'
+          'P2P-Src: $_email\r\n\r\n';
+      _sendSbMsgPayload(
+        [...utf8.encode(mimePrep), ...dataPrepPayload],
+        debugLabel: 'Avatar data-prep → $from session=$sessionId',
+        msgFlag: 'D',
+      );
+      _log('Sent avatar data-prep to $from');
+
+      // Small delay to let the peer process the data-prep before we
+      // start streaming the actual image bytes.
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+
+      // Send data in 1202-byte chunks (max for SB relay)
+      const maxChunk = 1202;
+      int offset = 0;
+      final totalSize = avatarBytes.length;
+
+      while (offset < totalSize) {
+        final chunkEnd = (offset + maxChunk).clamp(0, totalSize);
+        final chunk = avatarBytes.sublist(offset, chunkEnd);
+
+        final dataPayload = _slpService.buildP2pDataChunk(
+          sessionId: sessionId,
+          baseId: dataBaseId,
+          offset: offset,
+          totalSize: totalSize,
+          chunkData: chunk,
+          flags: 0x20, // data flag
+        );
+        final mimeData = 'MIME-Version: 1.0\r\n'
+            'Content-Type: application/x-msnmsgrp2p\r\n'
+            'P2P-Dest: $from\r\n'
+            'P2P-Src: $_email\r\n\r\n';
+        _sendSbMsgPayload(
+          [...utf8.encode(mimeData), ...dataPayload],
+          debugLabel: 'Avatar data $offset-$chunkEnd/$totalSize → $from',
+          msgFlag: 'D',
+        );
+        offset = chunkEnd;
+        // Small yield to avoid flooding the SB socket
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      _log('Avatar data fully sent to $from ($totalSize bytes in ${(totalSize / maxChunk).ceil()} chunks)');
+
+      // ── Send BYE to cleanly close the P2P session ─────────────────
+      // WLM 2009 expects a BYE after all data has been transferred;
+      // without it the peer's P2P state machine hangs / times out and
+      // may revert to the default avatar.
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      final byeSlp = [
+        'BYE MSNMSGR:$from MSNSLP/1.0',
+        'To: <msnmsgr:$from>',
+        'From: <msnmsgr:$_email>',
+        'Via: MSNSLP/1.0/TLP ;branch=$branch',
+        'CSeq: 0',
+        'Call-ID: $callId',
+        'Max-Forwards: 0',
+        'Content-Type: application/x-msnmsgr-sessionclosebody',
+        'Content-Length: 0',
+        '',
+        '',
+      ].join('\r\n');
+      final byePayload = _slpService.buildP2pPayload(0, byeBaseId, 0, byeSlp);
+      final mimeBye = 'MIME-Version: 1.0\r\n'
+          'Content-Type: application/x-msnmsgrp2p\r\n'
+          'P2P-Dest: $from\r\n'
+          'P2P-Src: $_email\r\n\r\n';
+      _sendSbMsgPayload(
+        [...utf8.encode(mimeBye), ...byePayload],
+        debugLabel: 'Avatar BYE → $from session=$sessionId',
+        msgFlag: 'D',
+      );
+      _log('Sent avatar BYE to $from');
+    });
+  }
+
+  /// Returns the local avatar file path from SharedPreferences.
+  Future<String?> _getLocalAvatarPath() async {
+    if (_email.isEmpty) {
+      _log('_getLocalAvatarPath: email is empty — cannot look up avatar');
+      return null;
+    }
+    final key = 'wlm_self_avatar_path_${_email.toLowerCase()}';
+    final prefs = await SharedPreferences.getInstance();
+    final path = prefs.getString(key);
+    _log('_getLocalAvatarPath: key=$key → ${path ?? 'null'}');
+    if (path != null && !File(path).existsSync()) {
+      _log('_getLocalAvatarPath: file does not exist at $path');
+      return null;
+    }
+    return path;
+  }
+
+  /// Send a generic SLP 603 decline.
+  void _sendSlpDecline(String to, String branch, String callId) {
+    final declineText = [
+      'MSNSLP/1.0 603 Decline',
+      'To: <msnmsgr:$to>',
+      'From: <msnmsgr:$_email>',
+      'Via: MSNSLP/1.0/TLP ;branch=$branch',
+      'CSeq: 1',
+      'Call-ID: $callId',
+      'Max-Forwards: 0',
+      'Content-Type: application/x-msnmsgr-sessionreqbody',
+      'Content-Length: 0',
+      '',
+      '',
+    ].join('\r\n');
+    final payload = _slpService.buildP2pPayload(0, Random().nextInt(0x7fffffff), 0, declineText);
+    final mime = 'MIME-Version: 1.0\r\n'
+        'Content-Type: application/x-msnmsgrp2p\r\n'
+        'P2P-Dest: $to\r\n'
+        'P2P-Src: $_email\r\n\r\n';
+    _sendSbMsgPayload(
+      [...utf8.encode(mime), ...payload],
+      debugLabel: 'SLP 603 Decline → $to callId=$callId',
+      msgFlag: 'D',
+    );
   }
 
   String? _extractXmlTag(String payload, String tag) {
@@ -3110,6 +4083,8 @@ class MsnpContactSnapshot {
     this.avatarMsnObject,
     this.avatarCreator,
     this.avatarSha1d,
+    this.ddpMsnObject,
+    this.ddpSha1d,
     this.scene,
     this.colorScheme,
   });
@@ -3122,6 +4097,8 @@ class MsnpContactSnapshot {
   final String? avatarMsnObject;
   final String? avatarCreator;
   final String? avatarSha1d;
+  final String? ddpMsnObject;
+  final String? ddpSha1d;
   final String? scene;
   final String? colorScheme;
 }
@@ -3136,6 +4113,8 @@ class _KnownContact {
     this.avatarMsnObject,
     this.avatarCreator,
     this.avatarSha1d,
+    this.ddpMsnObject,
+    this.ddpSha1d,
     this.scene,
     this.colorScheme,
   });
@@ -3148,6 +4127,8 @@ class _KnownContact {
   final String? avatarMsnObject;
   final String? avatarCreator;
   final String? avatarSha1d;
+  final String? ddpMsnObject;
+  final String? ddpSha1d;
   final String? scene;
   final String? colorScheme;
 
@@ -3159,6 +4140,8 @@ class _KnownContact {
     String? avatarMsnObject,
     String? avatarCreator,
     String? avatarSha1d,
+    String? ddpMsnObject,
+    String? ddpSha1d,
     String? scene,
     String? colorScheme,
   }) {
@@ -3171,6 +4154,8 @@ class _KnownContact {
       avatarMsnObject: avatarMsnObject ?? this.avatarMsnObject,
       avatarCreator: avatarCreator ?? this.avatarCreator,
       avatarSha1d: avatarSha1d ?? this.avatarSha1d,
+      ddpMsnObject: ddpMsnObject ?? this.ddpMsnObject,
+      ddpSha1d: ddpSha1d ?? this.ddpSha1d,
       scene: scene ?? this.scene,
       colorScheme: colorScheme ?? this.colorScheme,
     );

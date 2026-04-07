@@ -54,7 +54,7 @@ class AppLocalizationsPt extends AppLocalizations {
   String get changeStatus => 'Alterar estado';
 
   @override
-  String get spaceHeyFooter => 'SpaceHey - a space for friends.';
+  String get spaceHeyFooter => '';
 
   @override
   String messageSays(Object name) {
@@ -62,10 +62,35 @@ class AppLocalizationsPt extends AppLocalizations {
   }
 
   @override
-  String get messageMeSays => 'Eu digo:';
+  String messageMeSays(Object name) {
+    return '$name diz:';
+  }
+
+  @override
+  String messageSends(Object name) {
+    return '$name envia:';
+  }
 
   @override
   String typingIndicator(Object name) {
     return '$name está a escrever...';
   }
+
+  @override
+  String get moreStatuses => 'Mais Estados';
+
+  @override
+  String get signOutHere => 'Terminar sessão aqui';
+
+  @override
+  String get changeDisplayPicture => 'Alterar imagem de apresentação...';
+
+  @override
+  String get changeScene => 'Alterar cenário...';
+
+  @override
+  String get changeDisplayName => 'Alterar nome a apresentar...';
+
+  @override
+  String get menuOptions => 'Opções...';
 }

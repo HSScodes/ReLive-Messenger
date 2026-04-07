@@ -1,7 +1,8 @@
 import 'dart:async';
+import 'dart:math';
 import 'dart:io';
-import 'dart:math' as math;
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:wlm_project/l10n/app_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -16,7 +17,11 @@ import '../../services/p2p_session_manager.dart';
 import '../../providers/profile_avatar_provider.dart';
 import '../../utils/presence_status.dart';
 import '../../utils/wlm_color_tags.dart';
+import '../../widgets/win7_back_button.dart';
 import '../../widgets/wlm_scene_background.dart';
+import '../../widgets/emoticon_text.dart';
+import '../../widgets/emoticon_picker.dart';
+import '../../widgets/avatar_widget.dart';
 
 class ChatWindowScreen extends ConsumerStatefulWidget {
   const ChatWindowScreen({super.key, required this.contact});
@@ -27,33 +32,35 @@ class ChatWindowScreen extends ConsumerStatefulWidget {
   ConsumerState<ChatWindowScreen> createState() => _ChatWindowScreenState();
 }
 
-class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen> {
+class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
+    with SingleTickerProviderStateMixin {
   final TextEditingController _controller = TextEditingController();
   final ScrollController _messagesScrollController = ScrollController();
   Timer? _typingDebounce;
   int _lastThreadSize = 0;
+  OverlayEntry? _emoticonOverlay;
+
+  // Nudge shake animation
+  late final AnimationController _shakeController;
+  late final Animation<double> _shakeAnimation;
 
   static const String _assetAvatarFrame =
       'assets/images/extracted/msgsres/carved_png_9812096.png';
   static const String _assetAvatarUser =
       'assets/images/extracted/msgsres/carved_png_9801032.png';
-  static const String _assetArrow =
-      'assets/images/extracted/msgsres/carved_png_10968848.png';
-  static const String _assetIconA =
-      'assets/images/extracted/msgsres/carved_png_9663952.png';
-  static const String _assetIconB =
-      'assets/images/extracted/msgsres/carved_png_9783656.png';
-  static const String _assetIconC =
+  static const String _assetWlmIcon =
       'assets/images/extracted/msgsres/carved_png_9835392.png';
-  static const String _assetIconD =
-      'assets/images/extracted/msgsres/carved_png_9727920.png';
+    static const String _assetNudgeIcon =
+      'assets/images/extracted/msgsres/carved_png_9432408.png';
+
   static const String _assetChromeBar =
       'assets/images/extracted/msgsres/carved_png_427616.png';
   static const String _assetChromeBarLight =
       'assets/images/extracted/msgsres/carved_png_433248.png';
 
   Widget _contactAvatar(Contact contact, {double? width, double? height}) {
-    final path = contact.avatarLocalPath;
+    // Prefer DDP (dynamic display picture / animated GIF) over static avatar.
+    final path = contact.ddpLocalPath ?? contact.avatarLocalPath;
     if (path != null && path.isNotEmpty) {
       final file = File(path);
       if (file.existsSync()) {
@@ -91,7 +98,7 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen> {
   Color _statusFrame(PresenceStatus status) {
     switch (status) {
       case PresenceStatus.online:
-        return const Color(0xFF47D84B);
+        return const Color(0xFF39FF14);
       case PresenceStatus.busy:
         return const Color(0xFFD9554B);
       case PresenceStatus.away:
@@ -101,21 +108,65 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen> {
     }
   }
 
+  Color _contactThemeBase(Contact contact) {
+    final cs = contact.colorScheme;
+    if (cs != null && cs.isNotEmpty && cs != '-1') {
+      final parsed = int.tryParse(cs);
+      if (parsed != null && parsed != 0) {
+        final rgb = parsed < 0 ? (0xFFFFFF + parsed + 1) : parsed;
+        return Color(0xFF000000 | (rgb & 0xFFFFFF));
+      }
+    }
+    return const Color(0xFF2C79B4);
+  }
+
+  Color _lighten(Color color, double delta) {
+    final hsl = HSLColor.fromColor(color);
+    return hsl
+        .withLightness((hsl.lightness + delta).clamp(0.0, 1.0))
+        .toColor();
+  }
+
+  Color _darken(Color color, double delta) {
+    final hsl = HSLColor.fromColor(color);
+    return hsl
+        .withLightness((hsl.lightness - delta).clamp(0.0, 1.0))
+        .toColor();
+  }
+
   @override
   void initState() {
     super.initState();
+    _shakeController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 500),
+    );
+    _shakeAnimation = Tween<double>(begin: 0, end: 1).animate(
+      CurvedAnimation(parent: _shakeController, curve: Curves.linear),
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(msnpClientProvider).requestAvatarFetchForContact(
-        widget.contact.email,
-        force: true,
-      );
+      // Only trigger a P2P fetch if the contact doesn't already have a
+      // cached avatar.  Using force:true on every chat open causes a new
+      // SB + INVITE cycle that, on timeout, wipes the existing avatar.
+      final hasAvatar = widget.contact.avatarLocalPath != null &&
+          widget.contact.avatarLocalPath!.isNotEmpty;
+      if (!hasAvatar) {
+        ref.read(msnpClientProvider).requestAvatarFetchForContact(
+          widget.contact.email,
+          force: true,
+        );
+      }
+      // Refresh cached avatar (CrossTalk / persistent cache) for this contact.
+      ref.read(contactsProvider.notifier).refreshAvatarFor(widget.contact.email);
     });
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollMessagesToBottom());
   }
 
   @override
   void dispose() {
+    _emoticonOverlay?.remove();
     _typingDebounce?.cancel();
+    _shakeController.dispose();
     _messagesScrollController.dispose();
     _controller.dispose();
     super.dispose();
@@ -161,6 +212,287 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollMessagesToBottom());
   }
 
+  Future<void> _pickAndSendFile(Contact contact) async {
+    final result = await FilePicker.platform.pickFiles();
+    if (result == null || result.files.isEmpty) return;
+    final file = result.files.first;
+    if (file.path == null) return;
+    await ref.read(chatProvider.notifier).sendFile(
+      to: contact.email,
+      filePath: file.path!,
+    );
+    if (mounted) {
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _scrollMessagesToBottom());
+    }
+  }
+
+  void _showInviteContactPicker(Contact currentContact) {
+    final contacts = ref.read(contactsProvider);
+    final online = contacts
+        .where((c) =>
+            c.status != PresenceStatus.appearOffline &&
+            c.email.toLowerCase() != currentContact.email.toLowerCase())
+        .toList();
+
+    if (online.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No other contacts online to invite.')),
+      );
+      return;
+    }
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return Dialog(
+          backgroundColor: const Color(0xFFF0F4F8),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(4),
+            side: const BorderSide(color: Color(0xFF7A9BB5)),
+          ),
+          child: SizedBox(
+            width: 280,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [Color(0xFF2B6DAD), Color(0xFF4A9BD9)],
+                    ),
+                    borderRadius: BorderRadius.only(
+                      topLeft: Radius.circular(4),
+                      topRight: Radius.circular(4),
+                    ),
+                  ),
+                  child: const Text(
+                    'Invite Contact',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      fontFamilyFallback: ['Segoe UI', 'Tahoma'],
+                    ),
+                  ),
+                ),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 300),
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: online.length,
+                    itemBuilder: (_, i) {
+                      final c = online[i];
+                      return ListTile(
+                        dense: true,
+                        leading: AvatarWidget(
+                          status: c.status,
+                          imagePath: c.ddpLocalPath ?? c.avatarLocalPath,
+                          size: 32,
+                        ),
+                        title: Text(
+                          stripWlmColorTags(c.displayName),
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontFamilyFallback: ['Segoe UI', 'Tahoma'],
+                          ),
+                        ),
+                        subtitle: Text(c.email,
+                            style: const TextStyle(fontSize: 11)),
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          // CAL the contact into the existing switchboard
+                          ref.read(msnpClientProvider).inviteToSwitchboard(c.email);
+                        },
+                      );
+                    },
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('Cancel',
+                          style: TextStyle(color: Color(0xFF4A6A84))),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _fileTransferBubble(
+      Message message, bool incoming, Contact contact) {
+    final state = message.fileTransferState;
+    final fileName = message.fileName ?? 'file';
+    final size = message.fileSize ?? 0;
+    final sizeStr = _formatFileSize(size);
+    final l10n = AppLocalizations.of(context)!;
+
+    // Resolve sender name for "sends:" header
+    final String senderLabel;
+    if (incoming) {
+      final rawName = stripWlmColorTags(contact.displayName);
+      senderLabel = (rawName.isNotEmpty && rawName != contact.email)
+          ? rawName
+          : contact.email;
+    } else {
+      senderLabel = ref.read(msnpClientProvider).selfDisplayName;
+    }
+
+    return Column(
+      crossAxisAlignment: incoming ? CrossAxisAlignment.start : CrossAxisAlignment.end,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 2),
+          child: Text(
+            l10n.messageSends(senderLabel),
+            style: TextStyle(
+              color: incoming
+                  ? const Color(0xFF2364A6)
+                  : const Color(0xFF1B7A1B),
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              fontFamilyFallback: const ['Segoe UI', 'Tahoma', 'Arial'],
+            ),
+          ),
+        ),
+        Align(
+      alignment: incoming ? Alignment.centerLeft : Alignment.centerRight,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        constraints: const BoxConstraints(maxWidth: 320),
+        decoration: BoxDecoration(
+          color: incoming
+              ? const Color(0xFFE5F3FD)
+              : const Color(0xFFDFF5E0),
+          border: Border.all(color: const Color(0xFFAAC0D3)),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header
+            Row(children: [
+              const Icon(Icons.insert_drive_file_outlined,
+                  size: 20, color: Color(0xFF2364A6)),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  fileName,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF1B3146),
+                    fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ]),
+            const SizedBox(height: 4),
+            Text(
+              sizeStr,
+              style: const TextStyle(
+                fontSize: 11,
+                color: Color(0xFF5A758A),
+                fontFamilyFallback: ['Segoe UI', 'Tahoma'],
+              ),
+            ),
+            const SizedBox(height: 6),
+            // Status / actions
+            if (state == FileTransferState.offered && incoming)
+              Row(children: [
+                _ftActionBtn('Accept', const Color(0xFF2C8C3C), () {
+                  ref
+                      .read(chatProvider.notifier)
+                      .acceptFileTransfer(message.fileTransferId ?? '');
+                }),
+                const SizedBox(width: 8),
+                _ftActionBtn('Decline', const Color(0xFF9C3030), () {
+                  ref
+                      .read(chatProvider.notifier)
+                      .declineFileTransfer(message.fileTransferId ?? '');
+                }),
+              ])
+            else
+              Text(
+                _ftStateLabel(state, incoming),
+                style: TextStyle(
+                  fontSize: 12,
+                  fontStyle: FontStyle.italic,
+                  color: state == FileTransferState.completed
+                      ? const Color(0xFF2C8C3C)
+                      : state == FileTransferState.failed ||
+                              state == FileTransferState.declined
+                          ? const Color(0xFF9C3030)
+                          : const Color(0xFF375A78),
+                  fontFamilyFallback: const ['Segoe UI', 'Tahoma'],
+                ),
+              ),
+          ],
+        ),
+      ),
+    ),  // close Align
+      ],  // close Column children
+    );  // close Column
+  }
+
+  Widget _ftActionBtn(String label, Color color, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(3),
+        ),
+        child: Text(label,
+            style: const TextStyle(
+              fontSize: 12,
+              color: Colors.white,
+              fontWeight: FontWeight.w600,
+              fontFamilyFallback: ['Segoe UI', 'Tahoma'],
+            )),
+      ),
+    );
+  }
+
+  String _ftStateLabel(FileTransferState state, bool incoming) {
+    switch (state) {
+      case FileTransferState.none:
+        return '';
+      case FileTransferState.offered:
+        return incoming ? 'Waiting for your response...' : 'Waiting for response...';
+      case FileTransferState.accepted:
+        return 'Transfer accepted — starting...';
+      case FileTransferState.transferring:
+        return 'Transferring...';
+      case FileTransferState.completed:
+        return 'Transfer complete';
+      case FileTransferState.declined:
+        return 'Transfer declined';
+      case FileTransferState.failed:
+        return 'Transfer failed';
+    }
+  }
+
+  String _formatFileSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
@@ -171,11 +503,32 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen> {
     final isContactTyping = typingContacts.contains(contact.email.toLowerCase());
     final thread = ref.read(chatProvider.notifier).threadForContact(contact.email);
     if (thread.length != _lastThreadSize) {
+      // Check if the newest message is an incoming nudge → trigger shake
+      if (thread.length > _lastThreadSize && thread.isNotEmpty) {
+        final newest = thread.last;
+        if (newest.isNudge &&
+            newest.from.toLowerCase() == contact.email.toLowerCase()) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _shakeController.forward(from: 0);
+          });
+        }
+      }
       _lastThreadSize = thread.length;
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollMessagesToBottom());
     }
 
-    return Scaffold(
+    return AnimatedBuilder(
+      animation: _shakeAnimation,
+      builder: (context, child) {
+        final dx = _shakeController.isAnimating
+            ? sin(_shakeAnimation.value * pi * 6) * 8.0
+            : 0.0;
+        return Transform.translate(
+          offset: Offset(dx, 0),
+          child: child,
+        );
+      },
+      child: Scaffold(
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
@@ -207,7 +560,11 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen> {
                 child: Container(
                   margin: const EdgeInsets.fromLTRB(6, 4, 6, 0),
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.80),
+                    color: Color.lerp(
+                      _chatAreaTint(contact),
+                      Colors.white,
+                      0.25,
+                    )!.withOpacity(0.92),
                     border: Border.all(color: const Color(0xFF94B2CB)),
                     boxShadow: [
                       BoxShadow(
@@ -223,7 +580,7 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen> {
                         child: Container(
                           margin: const EdgeInsets.all(6),
                           decoration: BoxDecoration(
-                            color: Colors.white,
+                            color: _chatAreaTint(contact),
                             border: Border.all(color: const Color(0xFFB4C7D7)),
                           ),
                           child: ListView.builder(
@@ -233,45 +590,86 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen> {
                             itemBuilder: (context, index) {
                               final message = thread[index];
                               final incoming = _isIncoming(message, contact.email);
-                              return Align(
-                                alignment: incoming ? Alignment.centerLeft : Alignment.centerRight,
-                                child: Container(
-                                  margin: const EdgeInsets.only(bottom: 8),
-                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                                  decoration: BoxDecoration(
-                                    color: incoming
-                                        ? const Color(0xFFE5F3FD)
-                                        : const Color(0xFFDFF5E0),
-                                    border: Border.all(color: const Color(0xFFAAC0D3)),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        incoming
-                                            ? l10n.messageSays(stripWlmColorTags(contact.displayName))
-                                            : l10n.messageMeSays,
-                                        style: const TextStyle(
-                                          color: Color(0xFF26445E),
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w600,
-                                          fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
+
+                              // File transfer messages get a special widget
+                              if (message.isFileTransfer) {
+                                return _fileTransferBubble(
+                                    message, incoming, contact);
+                              }
+
+                              // WLM 2009 flat format:
+                              // Show sender header only when sender changes
+                              final showHeader = index == 0 ||
+                                  thread[index - 1].from != message.from ||
+                                  thread[index - 1].isFileTransfer;
+
+                              final rawDisplayName = stripWlmColorTags(contact.displayName);
+                              final senderName = incoming
+                                  ? (rawDisplayName.isNotEmpty &&
+                                   rawDisplayName != contact.email
+                                      ? rawDisplayName
+                                      : contact.email)
+                                  : null;
+                              final selfName = ref.read(msnpClientProvider).selfDisplayName;
+
+                              return Padding(
+                                padding: EdgeInsets.only(
+                                  top: showHeader && index > 0 ? 8 : 0,
+                                  bottom: 1,
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    if (showHeader)
+                                      Padding(
+                                        padding: const EdgeInsets.only(bottom: 2),
+                                        child: Text(
+                                          incoming
+                                              ? l10n.messageSays(senderName!)
+                                              : l10n.messageMeSays(selfName),
+                                          style: TextStyle(
+                                            color: incoming
+                                                ? const Color(0xFF2364A6)
+                                                : const Color(0xFF1B7A1B),
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w600,
+                                            fontFamilyFallback: const [
+                                              'Segoe UI',
+                                              'Tahoma',
+                                              'Arial'
+                                            ],
+                                          ),
                                         ),
                                       ),
-                                      const SizedBox(height: 2),
-                                      Text(
-                                        message.body,
-                                        style: TextStyle(
-                                          color: message.isNudge
-                                              ? const Color(0xFFB02222)
-                                              : const Color(0xFF1B3146),
-                                          fontSize: 14,
-                                          fontFamilyFallback: const ['Segoe UI', 'Tahoma', 'Arial'],
-                                        ),
+                                    Padding(
+                                      padding: const EdgeInsets.only(left: 12),
+                                      child: Text.rich(
+                                        TextSpan(children: [
+                                          const TextSpan(
+                                            text: '■ ',
+                                            style: TextStyle(
+                                              fontSize: 8,
+                                              color: Color(0xFF5A7A94),
+                                            ),
+                                          ),
+                                          buildEmoticonSpan(
+                                            message.body,
+                                            TextStyle(
+                                              color: message.isNudge
+                                                  ? const Color(0xFFB02222)
+                                                  : const Color(0xFF1B3146),
+                                              fontSize: 14,
+                                              fontFamilyFallback: const [
+                                                'Segoe UI',
+                                                'Tahoma',
+                                                'Arial'
+                                              ],
+                                            ),
+                                          ),
+                                        ]),
                                       ),
-                                    ],
-                                  ),
+                                    ),
+                                  ],
                                 ),
                               );
                             },
@@ -309,10 +707,13 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen> {
           ),
         ),
       ),
-    );
+    ),  // close Scaffold (child of AnimatedBuilder)
+    );  // close AnimatedBuilder
   }
 
   Widget _titleBar(Contact contact) {
+    final themeBase = _contactThemeBase(contact);
+    final themeDark = _darken(themeBase, 0.18);
     return Container(
       height: 36,
       padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -325,13 +726,16 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen> {
             BlendMode.darken,
           ),
         ),
-        gradient: const LinearGradient(
-          colors: [Color(0xFF1E4E82), Color(0xFF2C79B4)],
+        gradient: LinearGradient(
+          colors: [
+            themeDark,
+            themeBase,
+          ],
         ),
       ),
       child: Row(
         children: [
-          Image.asset(_assetIconC, width: 16, height: 16),
+          Image.asset(_assetWlmIcon, width: 16, height: 16),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
@@ -345,20 +749,23 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen> {
               ),
             ),
           ),
-          _captionButton('−'),
-          _captionButton('□'),
-          _captionButton('×', close: true),
+
         ],
       ),
     );
   }
 
   Widget _menuBar() {
-    const entries = ['Photos', 'Files', 'Video', 'Call', 'Games'];
+    final contact = _currentContact();
+    final themeBase = _contactThemeBase(contact);
+    final menuTop = _lighten(themeBase, 0.35);
+    final menuMidA = _lighten(themeBase, 0.28);
+    final menuMidB = _lighten(themeBase, 0.20);
+    final menuBottom = _lighten(themeBase, 0.12);
     return Container(
       height: 30,
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 6),
       decoration: BoxDecoration(
         image: DecorationImage(
           image: const AssetImage(_assetChromeBarLight),
@@ -368,59 +775,58 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen> {
             BlendMode.srcATop,
           ),
         ),
-        gradient: const LinearGradient(
+        gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
           colors: [
-            Color(0xFFBEDAEF),
-            Color(0xFFA5CAE4),
-            Color(0xFF88B8D8),
-            Color(0xFF75A8CE),
+            menuTop,
+            menuMidA,
+            menuMidB,
+            menuBottom,
           ],
           stops: [0.0, 0.35, 0.5, 1.0],
         ),
       ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: [
-            InkWell(
-              onTap: () => Navigator.of(context).pop(),
-              child: Container(
-                width: 22,
-                height: 22,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFB9D9EE),
-                  border: Border.all(color: const Color(0xFF7BA4C1)),
-                  borderRadius: BorderRadius.circular(3),
-                ),
-                child: Transform.rotate(
-                  angle: math.pi,
-                  child: Image.asset(_assetArrow, width: 13, height: 12),
+      child: Row(
+        children: [
+          // Windows 7 Explorer circular back button
+          Win7BackButton(
+            size: 26,
+            onPressed: () => Navigator.of(context).pop(),
+          ),
+          const SizedBox(width: 16),
+          // Send Files button
+          GestureDetector(
+            onTap: () => _pickAndSendFile(contact),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              child: Text(
+                'Send Files',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 15,
+                  fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
                 ),
               ),
             ),
-            const SizedBox(width: 10),
-            for (final e in entries)
-              Padding(
-                padding: const EdgeInsets.only(right: 20),
-                child: Text(
-                  e,
-                  style: const TextStyle(
-                    color: Color(0xFF153B5D),
-                    fontSize: 15,
-                    fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
-                  ),
+          ),
+          const SizedBox(width: 14),
+          // Invite contact button
+          GestureDetector(
+            onTap: () => _showInviteContactPicker(contact),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              child: Text(
+                'Invite',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 15,
+                  fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
                 ),
               ),
-            Image.asset(_assetIconD, width: 16, height: 16),
-            const SizedBox(width: 8),
-            Image.asset(_assetIconA, width: 16, height: 16),
-            const SizedBox(width: 8),
-            Image.asset(_assetArrow, width: 13, height: 12),
-          ],
-        ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -483,7 +889,23 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen> {
   /// Uses the contact's colorScheme from UBX when available,
   /// and falls back to the default WLM blue-sky scene as base.
   Widget _sceneBackground(Contact contact) {
-    // Try to use the contact's UBX <ColorScheme> first.
+    // 1. If the contact has a scene image file, use it.
+    final scene = contact.scene;
+    if (scene != null && scene.isNotEmpty) {
+      // Scene value may be just a filename (e.g. "0001.png") or a full asset path.
+      final assetPath = scene.contains('/')
+          ? scene
+          : 'assets/images/scenes/$scene';
+      return Image.asset(
+        assetPath,
+        fit: BoxFit.cover,
+        width: double.infinity,
+        height: double.infinity,
+        errorBuilder: (_, __, ___) => const WlmSceneBackground(height: 130),
+      );
+    }
+
+    // 2. Use the contact's UBX <ColorScheme> as a colour gradient.
     // "-1" is the WLM default meaning "no custom colour — use default scene".
     final cs = contact.colorScheme;
     if (cs != null && cs.isNotEmpty && cs != '-1') {
@@ -497,6 +919,27 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen> {
 
     // Default: WLM 2009 blue-sky scene with light rays.
     return const WlmSceneBackground(height: 130);
+  }
+
+  /// Returns a light tint of the contact's color scheme for the chat
+  /// transcript background. In WLM 2009, the message area picks up a
+  /// visible hue from the contact scene/colour.
+  Color _chatAreaTint(Contact contact) {
+    final cs = contact.colorScheme;
+    if (cs != null && cs.isNotEmpty && cs != '-1') {
+      final parsed = int.tryParse(cs);
+      if (parsed != null && parsed != 0) {
+        final rgb = parsed < 0 ? (0xFFFFFF + parsed + 1) : parsed;
+        final base = Color(0xFF000000 | (rgb & 0xFFFFFF));
+        final hsl = HSLColor.fromColor(base);
+        // WLM 2009 pastel tint — visible but soft.
+        return hsl
+            .withSaturation((hsl.saturation * 0.45).clamp(0.0, 1.0))
+            .withLightness(0.90)
+            .toColor();
+      }
+    }
+    return Colors.white;
   }
 
   Widget _colorGradientScene(Color baseColor) {
@@ -583,16 +1026,19 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen> {
                   child: Stack(
                     alignment: Alignment.center,
                     children: [
-                      // Photo / placeholder behind the Aero frame
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(6),
-                        child: _contactAvatar(contact, width: 56, height: 56),
+                      // Photo — inset ~15.5% to sit inside the aero frame center
+                      Positioned(
+                        top: 10, left: 10, right: 10, bottom: 10,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(3),
+                          child: _contactAvatar(contact, width: 48, height: 48),
+                        ),
                       ),
                       // Aero glass frame, recolored by status
                       Positioned.fill(
                         child: ColorFiltered(
                           colorFilter: ColorFilter.mode(
-                            _statusFrame(contact.status).withValues(alpha: 0.72),
+                            _statusFrame(contact.status).withValues(alpha: 0.85),
                             BlendMode.srcATop,
                           ),
                           child: Image.asset(_assetAvatarFrame,
@@ -677,33 +1123,46 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen> {
         children: [
           // Self avatar column
           Padding(
-            padding: const EdgeInsets.only(bottom: 4, right: 4),
+            padding: const EdgeInsets.only(bottom: 4, right: 0),
             child: SizedBox(
               width: 52,
               height: 52,
               child: Stack(
                 alignment: Alignment.center,
                 children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(6),
-                      border: Border.all(
-                          color: _statusFrame(selfStatus),
-                          width: 1.5),
-                      boxShadow: [
-                        BoxShadow(
-                          color: _statusFrame(selfStatus).withOpacity(0.40),
-                          blurRadius: 6,
-                          spreadRadius: 0.5,
-                        ),
-                      ],
+                  // Photo — inset ~15.5% to sit inside the aero frame center
+                  Positioned(
+                    top: 8, left: 8, right: 8, bottom: 8,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(3),
+                      child: _selfAvatar(selfAvatarPath, width: 36, height: 36),
                     ),
                   ),
-                  Image.asset(_assetAvatarFrame, width: 50, height: 50),
-                  _selfAvatar(selfAvatarPath, width: 36, height: 36),
+                  // Aero glass frame, recolored by status
+                  Positioned.fill(
+                    child: ColorFiltered(
+                      colorFilter: ColorFilter.mode(
+                        _statusFrame(selfStatus).withValues(alpha: 0.85),
+                        BlendMode.srcATop,
+                      ),
+                      child: Image.asset(_assetAvatarFrame, fit: BoxFit.fill),
+                    ),
+                  ),
                 ],
+              ),
+            ),
+          ),
+          // Speech bubble triangle pointing from avatar to text field
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: SizedBox(
+              width: 8,
+              height: 52,
+              child: Center(
+                child: CustomPaint(
+                  size: const Size(8, 12),
+                  painter: _SpeechTrianglePainter(color: const Color(0xFFE7EEF5)),
+                ),
               ),
             ),
           ),
@@ -747,39 +1206,49 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen> {
                   ),
                   child: Row(
                     children: [
-                      Image.asset(_assetIconD, width: 16, height: 16),
-                      const SizedBox(width: 8),
-                      Image.asset(_assetIconC, width: 16, height: 16),
-                      const SizedBox(width: 8),
-                      Image.asset(_assetIconA, width: 16, height: 16),
-                      const SizedBox(width: 8),
-                      Image.asset(_assetIconB, width: 16, height: 16),
+                      // Emoticon picker button
+                      _emoticonButton(),
                       const Spacer(),
+                      // Nudge button
                       GestureDetector(
                         onTap: () => _sendNudge(contact),
                         child: Container(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 4),
+                              horizontal: 8, vertical: 4),
+                          margin: const EdgeInsets.only(right: 6),
                           decoration: BoxDecoration(
                             gradient: const LinearGradient(
                               begin: Alignment.topCenter,
                               end: Alignment.bottomCenter,
-                              colors: [Color(0xFFE5ECF3), Color(0xFFCDD9E6)],
+                              colors: [Color(0xFFE88A2A), Color(0xFFD06A10)],
                             ),
-                            border: Border.all(color: const Color(0xFF96ADC1)),
+                            border: Border.all(color: const Color(0xFF8A4500)),
                             borderRadius: BorderRadius.circular(3),
                           ),
-                          child: const Text('Nudge',
-                              style: TextStyle(
-                                  fontSize: 12,
-                                  color: Color(0xFF1E4F82),
-                                  fontFamilyFallback: [
-                                    'Segoe UI',
-                                    'Tahoma'
-                                  ])),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              // WLM nudge bell icon
+                              Image.asset(
+                                _assetNudgeIcon,
+                                width: 16,
+                                height: 16,
+                                filterQuality: FilterQuality.none,
+                              ),
+                              const SizedBox(width: 4),
+                              const Text('Nudge',
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w600,
+                                      fontFamilyFallback: [
+                                        'Segoe UI',
+                                        'Tahoma'
+                                      ])),
+                            ],
+                          ),
                         ),
                       ),
-                      const SizedBox(width: 6),
                       GestureDetector(
                         onTap: () => _sendMessage(contact),
                         child: Container(
@@ -835,15 +1304,7 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen> {
           ),
         ],
       ),
-      child: const Text(
-        'SpaceHey - a space for friends.',
-        style: TextStyle(
-          color: Color(0xFF223548),
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-          fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
-        ),
-      ),
+      child: const SizedBox.shrink(),
     );
   }
 
@@ -885,4 +1346,108 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen> {
 
     return Image.asset(_assetAvatarUser, width: width, height: height, fit: BoxFit.cover);
   }
+
+  // ── Emoticon picker ──────────────────────────────────────────────────
+
+  final GlobalKey _emoticonBtnKey = GlobalKey();
+
+  Widget _emoticonButton() {
+    return GestureDetector(
+      key: _emoticonBtnKey,
+      onTap: _toggleEmoticonPicker,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        // Clip to a single 19×19 cell from the sprite sheet (cell 0 = smiley)
+        child: SizedBox(
+          width: 19,
+          height: 19,
+          child: ClipRect(
+            child: OverflowBox(
+              maxWidth: 1520,
+              maxHeight: 19,
+              alignment: Alignment.centerLeft,
+              child: Image.asset(
+                'assets/images/extracted/msgsres/carved_png_9495208.png',
+                width: 1520,
+                height: 19,
+                filterQuality: FilterQuality.none,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _toggleEmoticonPicker() {
+    if (_emoticonOverlay != null) {
+      _emoticonOverlay!.remove();
+      _emoticonOverlay = null;
+      return;
+    }
+    final renderBox =
+        _emoticonBtnKey.currentContext?.findRenderObject() as RenderBox?;
+    if (renderBox == null) return;
+    final offset = renderBox.localToGlobal(Offset.zero);
+
+    _emoticonOverlay = OverlayEntry(
+      builder: (_) => Stack(
+        children: [
+          // Dismiss scrim
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: _closeEmoticonPicker,
+            ),
+          ),
+          Positioned(
+            left: offset.dx,
+            bottom: MediaQuery.of(context).size.height - offset.dy + 4,
+            child: EmoticonPicker(
+              onPicked: (code) {
+                final sel = _controller.selection;
+                final text = _controller.text;
+                final newText =
+                    text.substring(0, sel.baseOffset) +
+                    code +
+                    text.substring(sel.extentOffset);
+                _controller.value = TextEditingValue(
+                  text: newText,
+                  selection: TextSelection.collapsed(
+                      offset: sel.baseOffset + code.length),
+                );
+                _closeEmoticonPicker();
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+    Overlay.of(context).insert(_emoticonOverlay!);
+  }
+
+  void _closeEmoticonPicker() {
+    _emoticonOverlay?.remove();
+    _emoticonOverlay = null;
+  }
+}
+
+/// Paints a small left-pointing triangle for the speech bubble.
+class _SpeechTrianglePainter extends CustomPainter {
+  _SpeechTrianglePainter({required this.color});
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..color = color;
+    final path = Path()
+      ..moveTo(0, size.height / 2)
+      ..lineTo(size.width, 0)
+      ..lineTo(size.width, size.height)
+      ..close();
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(_SpeechTrianglePainter old) => old.color != color;
 }

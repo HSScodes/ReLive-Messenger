@@ -104,15 +104,31 @@ class MsnpParser {
     final parsed = _splitHeadersAndBody(payload);
     final contentType = (parsed.headers['content-type'] ?? '').toLowerCase();
     final typingUser = parsed.headers['typinguser'];
-    if (contentType.contains('text/x-msnmsgr-datacast') &&
-        parsed.headers['id']?.trim() == '1') {
-      return MsnpEvent(
-        type: MsnpEventType.nudge,
-        command: 'MSG',
-        from: from,
-        to: to,
-        body: 'Nudge',
-      );
+    if (contentType.contains('text/x-msnmsgr-datacast')) {
+      // Nudge: ID may be in headers (our format) or body (original WLM format)
+      final idFromHeader = parsed.headers['id']?.trim();
+      final idFromBody = _extractDatacastId(parsed.body);
+      final id = idFromHeader ?? idFromBody;
+      if (id == '1') {
+        return MsnpEvent(
+          type: MsnpEventType.nudge,
+          command: 'MSG',
+          from: from,
+          to: to,
+          body: 'Nudge',
+        );
+      }
+
+      // Wink datacast (ID: 2) — no Flash support, show placeholder
+      if (id == '2') {
+        return MsnpEvent(
+          type: MsnpEventType.system,
+          command: 'WINK',
+          from: from,
+          to: to,
+          body: 'sent you a wink!',
+        );
+      }
     }
 
     if (contentType.contains('text/x-msmsgscontrol') && typingUser != null && typingUser.isNotEmpty) {
@@ -278,6 +294,13 @@ class MsnpParser {
       return Uri.decodeComponent(value.replaceAll('+', ' '));
     }
     return null;
+  }
+
+  static final RegExp _datacastIdRegex = RegExp(r'ID:\s*(\d+)', caseSensitive: false);
+
+  static String? _extractDatacastId(String body) {
+    final match = _datacastIdRegex.firstMatch(body);
+    return match?.group(1);
   }
 }
 

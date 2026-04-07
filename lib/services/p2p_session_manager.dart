@@ -64,14 +64,17 @@ class _P2pInboundSession {
 class P2pSessionManager {
   P2pSessionManager({required this.onAvatarReady});
 
-  /// Called with (peerEmail, localFilePath) when reassembly finishes.
-  final void Function(String peerEmail, String filePath) onAvatarReady;
+  /// Called with (peerEmail, localFilePath, {sha1d}) when reassembly finishes.
+  final void Function(String peerEmail, String filePath, {String? sha1d}) onAvatarReady;
 
   final Map<int, _P2pInboundSession> _sessions = {};
 
   /// Stores the GUIDs from the INVITE we sent, keyed by normalised peer email.
   /// The SLP-level ACK reply requires the same callId and branchId.
   final Map<String, _InviteParams> _inviteParams = {};
+
+  /// SHA1D we requested for each peer, stored alongside invite params.
+  final Map<String, String> _inviteSha1d = {};
 
   // ---- Status stream (for UI visualizer) ----------------------------------
 
@@ -108,13 +111,18 @@ class P2pSessionManager {
     required String branchId,
     required int sessionId,
     required int baseId,
+    String? sha1d,
   }) {
-    _inviteParams[peerEmail.trim().toLowerCase()] = _InviteParams(
+    final key = peerEmail.trim().toLowerCase();
+    _inviteParams[key] = _InviteParams(
       callId: callId,
       branchId: branchId,
       sessionId: sessionId,
       baseId: baseId,
     );
+    if (sha1d != null && sha1d.isNotEmpty) {
+      _inviteSha1d[key] = sha1d;
+    }
   }
 
   _InviteParams? getInviteParams(String peerEmail) {
@@ -211,7 +219,11 @@ class P2pSessionManager {
         bytesReceived: session.totalSize,
         totalSize: session.totalSize,
       );
-      onAvatarReady(session.peerEmail, file.path);
+      // Retrieve the SHA1D from the stored invite params so the AVOK event
+      // carries the correct hash for the contacts provider to persist.
+      final params = _inviteParams[session.peerEmail.trim().toLowerCase()];
+      final sha1d = params != null ? _inviteSha1d[session.peerEmail.trim().toLowerCase()] : null;
+      onAvatarReady(session.peerEmail, file.path, sha1d: sha1d);
     } catch (error) {
       print('[P2P] Failed to save avatar for ${session.peerEmail}: $error');
     }

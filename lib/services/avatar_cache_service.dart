@@ -30,21 +30,27 @@ class AvatarCacheService {
   /// Call once during app startup (e.g. in ContactsNotifier.build).
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
-    for (final key in prefs.getKeys()) {
-      if (!key.startsWith(_kPath)) continue;
+    final pathKeys = prefs.getKeys().where((k) => k.startsWith(_kPath)).toList();
+    for (final key in pathKeys) {
       final email = key.substring(_kPath.length);
       final path = prefs.getString(key);
-      if (path != null && File(path).existsSync()) {
+      if (path == null) continue;
+      final exists = await File(path).exists();
+      if (exists) {
         _ram[email] = path;
         final sha1d = prefs.getString('$_kSha1d$email');
         if (sha1d != null && sha1d.isNotEmpty) {
           _sha1dRam[email] = sha1d;
         }
-      } else if (path != null) {
-        // Stale entry – prune keys
+      } else {
+        // File is gone — prune the path and timestamp, but KEEP the SHA1D
+        // so the system knows which avatar to re-fetch on next presence.
         await prefs.remove('$_kPath$email');
-        await prefs.remove('$_kSha1d$email');
         await prefs.remove('$_kTs$email');
+        final sha1d = prefs.getString('$_kSha1d$email');
+        if (sha1d != null && sha1d.isNotEmpty) {
+          _sha1dRam[email] = sha1d;
+        }
       }
     }
   }
@@ -69,7 +75,7 @@ class AvatarCacheService {
   Future<String?> get(String email, {String? currentSha1d}) async {
     final key = email.toLowerCase();
     final path = _ram[key];
-    if (path == null || !File(path).existsSync()) {
+    if (path == null || !(await File(path).exists())) {
       _ram.remove(key);
       return null;
     }
@@ -114,23 +120,38 @@ class AvatarCacheService {
 
   /// Tries to download the display picture from the CrossTalk directory.
   ///
-  /// CrossTalk stores the last avatar chosen in the desktop client under
-  /// the standard MSN usertile path. We try several candidate URLs.
-  Future<String?> fetchFromCrosstalkDirectory(String email) async {
+  /// CrossTalk stores the last avatar under the canonical path:
+  ///   /crosstalk/F126696BDBF6/{url-encoded-sha1d}
+  /// We also try the usertile path as a fallback.
+  Future<String?> fetchFromCrosstalkDirectory(String email,
+      {String? sha1d}) async {
     final emailEnc = Uri.encodeComponent(email.toLowerCase());
-    final candidates = <Uri>[
-      // Standard MSN MSNP usertile path – most likely to work
+
+    // Build candidates based on available info
+    final candidates = <Uri>[];
+
+    // If we have a sha1d (most useful — this is how the server indexes DPs),
+    // try the canonical CrossTalk raw-HTTP path first.
+    if (sha1d != null && sha1d.isNotEmpty) {
+      final encodedSha = Uri.encodeComponent(sha1d)
+          .replaceAll('%2F', '%2f')
+          .replaceAll('%3D', '%3d')
+          .replaceAll('%2B', '%2b');
+      candidates.add(
+          Uri.parse('http://31.97.100.150/crosstalk/F126696BDBF6/$encodedSha'));
+      candidates.add(
+          Uri.parse('http://crosstalk.im/crosstalk/F126696BDBF6/$encodedSha'));
+    }
+
+    // Usertile-style paths (email based)
+    candidates.addAll([
       Uri.parse(
-          'https://www.crosstalk.im/storage/usertile/$emailEnc/DisplayPicture'),
+          'http://31.97.100.150/storage/usertile/$emailEnc/DisplayPicture'),
       Uri.parse(
           'http://crosstalk.im/storage/usertile/$emailEnc/DisplayPicture'),
       Uri.parse(
-          'https://www.crosstalk.im/usertile/$emailEnc/DisplayPicture'),
-      // Alternative paths observed in CrossTalk traffic
-      Uri.parse('https://www.crosstalk.im/avatar/$emailEnc'),
-      Uri.parse('https://www.crosstalk.im/displaypic/$emailEnc'),
-      Uri.parse('https://www.crosstalk.im/directory/$emailEnc/avatar'),
-    ];
+          'https://crosstalk.im/storage/usertile/$emailEnc/DisplayPicture'),
+    ]);
 
     for (final uri in candidates) {
       final bytes = await _get(uri);

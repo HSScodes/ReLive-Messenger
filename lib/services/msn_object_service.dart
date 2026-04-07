@@ -115,7 +115,8 @@ class MsnObjectService {
       if (match == null) {
         return null;
       }
-      return Uri.decodeComponent((match.group(1) ?? '').replaceAll('+', ' '));
+      // MSNObject attributes are plain text inside XML — no URL decoding.
+      return match.group(1);
     }
 
     final url = attr('Url') ?? attr('URL') ?? attr('AvatarUrl') ?? attr('ContentUrl');
@@ -378,6 +379,78 @@ class MsnObjectService {
     // ignore: avoid_print
     print('[AVATAR] $message');
   }
+
+  /// Generates an MSNObject XML string for a local avatar file.
+  /// Returns null if the file doesn't exist or can't be read.
+  ///
+  /// The MSNObject format for display pictures (Type=3):
+  /// <msnobj Creator="user@example.com" Type="3" SHA1D="base64hash"
+  ///   Size="filesize" Location="0" Friendly="base64name"/>
+  Future<String?> generateMsnObjectXml({
+    required String creatorEmail,
+    required String avatarFilePath,
+    String? friendlyName,
+  }) async {
+    try {
+      final file = File(avatarFilePath);
+      if (!file.existsSync()) return null;
+      final bytes = await file.readAsBytes();
+      if (bytes.isEmpty) return null;
+
+      // SHA1D: SHA-1 hash of the file bytes, base64-encoded
+      final sha1Hash = sha1.convert(bytes);
+      final sha1d = base64.encode(sha1Hash.bytes);
+
+      // Friendly: display name in UTF-16LE, then base64-encoded
+      final friendly = friendlyName ?? creatorEmail;
+      final utf16leBytes = <int>[];
+      for (final codeUnit in friendly.codeUnits) {
+        utf16leBytes.add(codeUnit & 0xFF);
+        utf16leBytes.add((codeUnit >> 8) & 0xFF);
+      }
+      // Null terminator
+      utf16leBytes.addAll([0, 0]);
+      final friendlyB64 = base64.encode(utf16leBytes);
+
+      // Build MSNObject matching the attribute order real WLM 2009 uses:
+      //   Creator, Type, SHA1D, Size, Location, Friendly [, contenttype]
+      // For animated GIFs (Dynamic Display Pictures), WLM 2009 includes
+      // contenttype="D" so peers know to render the image as animated.
+      final isGif = bytes.length >= 6 &&
+          bytes[0] == 0x47 && // G
+          bytes[1] == 0x49 && // I
+          bytes[2] == 0x46;   // F
+      final xml = '<msnobj Creator="${_xmlEsc(creatorEmail)}" '
+          'Type="3" '
+          'SHA1D="$sha1d" '
+          'Size="${bytes.length}" '
+          'Location="0" '
+          'Friendly="$friendlyB64"'
+          '${isGif ? ' contenttype="D"' : ''}/>';
+      _log('Generated MSNObject: sha1d=$sha1d size=${bytes.length}'
+          '${isGif ? ' contenttype=D' : ''}');
+      return xml;
+    } catch (e) {
+      _log('Failed to generate MSNObject: $e');
+      return null;
+    }
+  }
+
+  /// Computes just the SHA1D for a local avatar file.
+  Future<String?> computeAvatarSha1d(String avatarFilePath) async {
+    try {
+      final file = File(avatarFilePath);
+      if (!file.existsSync()) return null;
+      final bytes = await file.readAsBytes();
+      if (bytes.isEmpty) return null;
+      return base64.encode(sha1.convert(bytes).bytes);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static String _xmlEsc(String s) =>
+      s.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 }
 
 class _DownloadResult {

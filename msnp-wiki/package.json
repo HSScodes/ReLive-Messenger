@@ -1,0 +1,13 @@
+{
+  "name": "yellows-msnp-wiki",
+  "version": "0.2.6",
+  "description": "The yellows111 MSNP wiki that aims for accuracy.",
+  "author": "yellows111",
+  "license": "GFDL-1.3-or-later",
+  "dependencies": {
+    "yiki": "git+https://git.computernewb.com/yellows111/yiki.git#semver:*"
+  },
+  "scripts": {
+    "build": "node ./node_modules/yiki/ymake.js"
+  }
+}

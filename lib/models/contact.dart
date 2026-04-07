@@ -11,6 +11,9 @@ class Contact {
     this.avatarCreator,
     this.avatarSha1d,
     this.avatarLocalPath,
+    this.ddpMsnObject,
+    this.ddpSha1d,
+    this.ddpLocalPath,
     this.scene,
     this.colorScheme,
     this.unreadCount = 0,
@@ -25,6 +28,9 @@ class Contact {
   final String? avatarCreator;
   final String? avatarSha1d;
   final String? avatarLocalPath;
+  final String? ddpMsnObject;
+  final String? ddpSha1d;
+  final String? ddpLocalPath;
   final String? scene;
   final String? colorScheme;
   final int unreadCount;
@@ -39,6 +45,9 @@ class Contact {
     String? avatarCreator,
     String? avatarSha1d,
     String? avatarLocalPath,
+    String? ddpMsnObject,
+    String? ddpSha1d,
+    String? ddpLocalPath,
     String? scene,
     String? colorScheme,
     int? unreadCount,
@@ -53,6 +62,9 @@ class Contact {
       avatarCreator: avatarCreator ?? this.avatarCreator,
       avatarSha1d: avatarSha1d ?? this.avatarSha1d,
       avatarLocalPath: avatarLocalPath ?? this.avatarLocalPath,
+      ddpMsnObject: ddpMsnObject ?? this.ddpMsnObject,
+      ddpSha1d: ddpSha1d ?? this.ddpSha1d,
+      ddpLocalPath: ddpLocalPath ?? this.ddpLocalPath,
       scene: scene ?? this.scene,
       colorScheme: colorScheme ?? this.colorScheme,
       unreadCount: unreadCount ?? this.unreadCount,

@@ -32,16 +32,16 @@ class AvatarWidget extends StatelessWidget {
       width: size,
       height: size,
       child: Stack(clipBehavior: Clip.none, children: [
-        // Photo / placeholder layer
-        Positioned.fill(
+        // Photo / placeholder layer – inset ~15.5% so the photo sits
+        // inside the frame's transparent center (original ratio 96/139).
+        Positioned(
+          top: size * 0.155, left: size * 0.155,
+          right: size * 0.155, bottom: size * 0.155,
           child: Opacity(
             opacity: online ? 1.0 : 0.45,
-            child: Padding(
-              padding: EdgeInsets.all(size * 0.08),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(size * 0.05),
-                child: _buildPhoto(),
-              ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(size * 0.06),
+              child: _buildPhoto(),
             ),
           ),
         ),
@@ -49,7 +49,7 @@ class AvatarWidget extends StatelessWidget {
         Positioned.fill(
           child: ColorFiltered(
             colorFilter: ColorFilter.mode(
-              tint.withValues(alpha: 0.72),
+              tint.withValues(alpha: 0.85),
               BlendMode.srcATop,
             ),
             child: Opacity(
@@ -65,10 +65,12 @@ class AvatarWidget extends StatelessWidget {
   Widget _buildPhoto() {
     final path = imagePath;
     if (path != null && path.isNotEmpty) {
-      final file = File(path);
-      if (file.existsSync()) {
-        return Image.file(file, fit: BoxFit.cover);
-      }
+      return Image.file(
+        File(path),
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) =>
+            Image.asset(_assetPlaceholder, fit: BoxFit.cover),
+      );
     }
     return Image.asset(_assetPlaceholder, fit: BoxFit.cover);
   }
@@ -76,7 +78,7 @@ class AvatarWidget extends StatelessWidget {
   Color _tintForStatus(PresenceStatus s) {
     switch (s) {
       case PresenceStatus.online:
-        return const Color(0xFF42D833);
+        return const Color(0xFF39FF14);
       case PresenceStatus.away:
         return const Color(0xFFE2C92D);
       case PresenceStatus.busy:

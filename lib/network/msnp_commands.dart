@@ -50,14 +50,32 @@ class MsnpCommands {
 
     static String adlEmpty(int trId) => 'ADL $trId 0\r\n';
 
-  static String chg(int trId, String presenceCode, {int? capabilities}) {
-    if (capabilities == null) {
-      return 'CHG $trId $presenceCode\r\n';
+    static String rml(int trId, String payload) {
+        final length = payload.codeUnits.length;
+        return 'RML $trId $length\r\n$payload';
     }
-    return 'CHG $trId $presenceCode $capabilities\r\n';
+
+  static String chg(int trId, String presenceCode, {int? capabilities, String? msnObject}) {
+    final buf = StringBuffer('CHG $trId $presenceCode');
+    if (capabilities != null) {
+      buf.write(' $capabilities');
+    }
+    if (msnObject != null && msnObject.isNotEmpty) {
+      buf.write(' $msnObject');
+    }
+    buf.write('\r\n');
+    return buf.toString();
   }
 
   static String png() => 'PNG\r\n';
 
   static String out() => 'OUT\r\n';
+
+  /// PRP MFN — set the user's display (friendly) name on the server.
+  static String prpMfn(int trId, String encodedName) =>
+      'PRP $trId MFN $encodedName\r\n';
+
+  /// CAL — invite a contact into the current switchboard session.
+  static String cal(int trId, String email) =>
+      'CAL $trId $email\r\n';
 }
