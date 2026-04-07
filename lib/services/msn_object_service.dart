@@ -6,12 +6,7 @@ import 'package:crypto/crypto.dart';
 import 'package:path_provider/path_provider.dart';
 
 class ParsedMsnObject {
-  const ParsedMsnObject({
-    this.url,
-    this.sha1d,
-    this.location,
-    this.creator,
-  });
+  const ParsedMsnObject({this.url, this.sha1d, this.location, this.creator});
 
   final String? url;
   final String? sha1d;
@@ -74,8 +69,12 @@ class MsnObjectService {
       }
       final result = await _downloadBytes(uri: uri, authTicket: authTicket);
       if (attempts <= 8) {
-        final status = result.statusCode?.toString() ?? (result.timedOut ? 'timeout' : 'error');
-        _log('Avatar probe #$attempts -> ${uri.path}${uri.hasQuery ? '?${uri.query}' : ''} [$status]');
+        final status =
+            result.statusCode?.toString() ??
+            (result.timedOut ? 'timeout' : 'error');
+        _log(
+          'Avatar probe #$attempts -> ${uri.path}${uri.hasQuery ? '?${uri.query}' : ''} [$status]',
+        );
       }
       bytes = result.bytes;
       if (bytes != null && bytes.isNotEmpty) {
@@ -94,7 +93,8 @@ class MsnObjectService {
 
     final cacheDir = await _avatarCacheDir();
     final extension = _guessExtension(bytes);
-    final filename = '${md5.convert(utf8.encode(cacheKey)).toString()}.$extension';
+    final filename =
+        '${md5.convert(utf8.encode(cacheKey)).toString()}.$extension';
     final file = File('${cacheDir.path}${Platform.pathSeparator}$filename');
     await file.writeAsBytes(bytes, flush: true);
 
@@ -119,7 +119,8 @@ class MsnObjectService {
       return match.group(1);
     }
 
-    final url = attr('Url') ?? attr('URL') ?? attr('AvatarUrl') ?? attr('ContentUrl');
+    final url =
+        attr('Url') ?? attr('URL') ?? attr('AvatarUrl') ?? attr('ContentUrl');
     final sha1d = attr('SHA1D');
     final location = attr('Location');
     final creator = attr('Creator');
@@ -136,29 +137,32 @@ class MsnObjectService {
     required Uri uri,
     required String authTicket,
   }) async {
-    final client = HttpClient()..connectionTimeout = const Duration(milliseconds: 900);
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(milliseconds: 900);
 
     try {
       final variants = <Map<String, String>>[
-        <String, String>{
-          HttpHeaders.cookieHeader: 'MSPAuth=$authTicket',
-        },
-        <String, String>{
-          'Authorization': 'Passport1.4 t=$authTicket',
-        },
+        <String, String>{HttpHeaders.cookieHeader: 'MSPAuth=$authTicket'},
+        <String, String>{'Authorization': 'Passport1.4 t=$authTicket'},
         <String, String>{},
       ];
 
       for (final headers in variants) {
-        final request = await client.getUrl(uri).timeout(const Duration(milliseconds: 900));
+        final request = await client
+            .getUrl(uri)
+            .timeout(const Duration(milliseconds: 900));
         for (final entry in headers.entries) {
           request.headers.set(entry.key, entry.value);
         }
         request.headers.set(HttpHeaders.userAgentHeader, 'MSMSGS');
 
-        final response = await request.close().timeout(const Duration(milliseconds: 900));
+        final response = await request.close().timeout(
+          const Duration(milliseconds: 900),
+        );
         if (response.statusCode < 200 || response.statusCode >= 300) {
-          if (response.statusCode == 401 || response.statusCode == 403 || response.statusCode == 404) {
+          if (response.statusCode == 401 ||
+              response.statusCode == 403 ||
+              response.statusCode == 404) {
             return _DownloadResult(statusCode: response.statusCode);
           }
           continue;
@@ -234,28 +238,55 @@ class MsnObjectService {
           .replaceAll('%2F', '%2f')
           .replaceAll('%3D', '%3d')
           .replaceAll('%2B', '%2b');
-      uris.add(Uri.parse('http://crosstalk.im/crosstalk/$eufSuffix/$encodedSha'));
+      uris.add(
+        Uri.parse('http://crosstalk.im/crosstalk/$eufSuffix/$encodedSha'),
+      );
     }
 
     void addPath(String path) {
       uris.add(Uri(scheme: 'http', host: host, port: 80, path: path));
       if (host != 'crosstalk.im') {
         uris.add(Uri(scheme: 'https', host: 'crosstalk.im', path: path));
-        uris.add(Uri(scheme: 'http', host: 'crosstalk.im', port: 80, path: path));
+        uris.add(
+          Uri(scheme: 'http', host: 'crosstalk.im', port: 80, path: path),
+        );
       } else {
         uris.add(Uri(scheme: 'https', host: host, path: path));
       }
     }
 
     void addQueryPath(String path, Map<String, String> query) {
-      uris.add(Uri(scheme: 'http', host: host, port: 80, path: path, queryParameters: query));
+      uris.add(
+        Uri(
+          scheme: 'http',
+          host: host,
+          port: 80,
+          path: path,
+          queryParameters: query,
+        ),
+      );
       if (host != 'crosstalk.im') {
-        uris.add(Uri(scheme: 'https', host: 'crosstalk.im', path: path, queryParameters: query));
         uris.add(
-          Uri(scheme: 'http', host: 'crosstalk.im', port: 80, path: path, queryParameters: query),
+          Uri(
+            scheme: 'https',
+            host: 'crosstalk.im',
+            path: path,
+            queryParameters: query,
+          ),
+        );
+        uris.add(
+          Uri(
+            scheme: 'http',
+            host: 'crosstalk.im',
+            port: 80,
+            path: path,
+            queryParameters: query,
+          ),
         );
       } else {
-        uris.add(Uri(scheme: 'https', host: host, path: path, queryParameters: query));
+        uris.add(
+          Uri(scheme: 'https', host: host, path: path, queryParameters: query),
+        );
       }
     }
 
@@ -288,9 +319,18 @@ class MsnObjectService {
       }
 
       if (sha1d != null && sha1d.isNotEmpty) {
-        addQueryPath('/storage/avatar', <String, String>{'creator': creator, 'sha1d': sha1d});
-        addQueryPath('/avatar', <String, String>{'creator': creator, 'sha1d': sha1d});
-        addQueryPath('/displaypic', <String, String>{'creator': creator, 'sha1d': sha1d});
+        addQueryPath('/storage/avatar', <String, String>{
+          'creator': creator,
+          'sha1d': sha1d,
+        });
+        addQueryPath('/avatar', <String, String>{
+          'creator': creator,
+          'sha1d': sha1d,
+        });
+        addQueryPath('/displaypic', <String, String>{
+          'creator': creator,
+          'sha1d': sha1d,
+        });
       }
 
       if (location != null && location.isNotEmpty) {
@@ -323,7 +363,9 @@ class MsnObjectService {
     try {
       final normalized = _normalizeBase64(raw);
       final bytes = base64.decode(normalized);
-      final hexLower = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final hexLower = bytes
+          .map((b) => b.toRadixString(16).padLeft(2, '0'))
+          .join();
       variants.add(hexLower);
       variants.add(hexLower.toUpperCase());
       final b64Url = base64Url.encode(bytes).replaceAll('=', '');
@@ -361,7 +403,10 @@ class MsnObjectService {
       return 'png';
     }
 
-    if (bytes.length >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF) {
+    if (bytes.length >= 3 &&
+        bytes[0] == 0xFF &&
+        bytes[1] == 0xD8 &&
+        bytes[2] == 0xFF) {
       return 'jpg';
     }
 
@@ -413,22 +458,43 @@ class MsnObjectService {
       final friendlyB64 = base64.encode(utf16leBytes);
 
       // Build MSNObject matching the attribute order real WLM 2009 uses:
-      //   Creator, Type, SHA1D, Size, Location, Friendly [, contenttype]
+      //   Creator, Size, Type, Location, Friendly, SHA1D, SHA1C [, contenttype]
       // For animated GIFs (Dynamic Display Pictures), WLM 2009 includes
       // contenttype="D" so peers know to render the image as animated.
-      final isGif = bytes.length >= 6 &&
+      final isGif =
+          bytes.length >= 6 &&
           bytes[0] == 0x47 && // G
           bytes[1] == 0x49 && // I
-          bytes[2] == 0x46;   // F
-      final xml = '<msnobj Creator="${_xmlEsc(creatorEmail)}" '
+          bytes[2] == 0x46; // F
+
+      // Build XML without SHA1C first, then compute SHA1C from it.
+      // Attribute order matches real WLM 2009: Creator, Type, SHA1D, Size,
+      // Location, Friendly (then optional SHA1C, contenttype).
+      final xmlNoC =
+          '<msnobj Creator="${_xmlEsc(creatorEmail)}" '
           'Type="3" '
           'SHA1D="$sha1d" '
           'Size="${bytes.length}" '
           'Location="0" '
           'Friendly="$friendlyB64"'
           '${isGif ? ' contenttype="D"' : ''}/>';
-      _log('Generated MSNObject: sha1d=$sha1d size=${bytes.length}'
-          '${isGif ? ' contenttype=D' : ''}');
+
+      // SHA1C: SHA-1 hash of the XML string (without SHA1C), base64-encoded
+      final sha1c = base64.encode(sha1.convert(utf8.encode(xmlNoC)).bytes);
+
+      final xml =
+          '<msnobj Creator="${_xmlEsc(creatorEmail)}" '
+          'Type="3" '
+          'SHA1D="$sha1d" '
+          'Size="${bytes.length}" '
+          'Location="0" '
+          'Friendly="$friendlyB64" '
+          'SHA1C="$sha1c"'
+          '${isGif ? ' contenttype="D"' : ''}/>';
+      _log(
+        'Generated MSNObject: sha1d=$sha1d sha1c=$sha1c size=${bytes.length}'
+        '${isGif ? ' contenttype=D' : ''}',
+      );
       return xml;
     } catch (e) {
       _log('Failed to generate MSNObject: $e');
@@ -449,16 +515,15 @@ class MsnObjectService {
     }
   }
 
-  static String _xmlEsc(String s) =>
-      s.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+  static String _xmlEsc(String s) => s
+      .replaceAll('&', '&amp;')
+      .replaceAll('"', '&quot;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;');
 }
 
 class _DownloadResult {
-  const _DownloadResult({
-    this.bytes,
-    this.statusCode,
-    this.timedOut = false,
-  });
+  const _DownloadResult({this.bytes, this.statusCode, this.timedOut = false});
 
   final List<int>? bytes;
   final int? statusCode;

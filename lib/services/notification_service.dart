@@ -19,15 +19,18 @@ class NotificationService {
   void Function(String? email)? onTapNotification;
 
   // Notification channel IDs
-  static const _msgChannelId = 'wlm_messages';
-  static const _fgChannelId = 'wlm_foreground';
+  static const _msgChannelId = 'wlm_messages_v2';
+  static const _nudgeChannelId = 'wlm_nudges_v2';
+  static const _fgChannelId = 'wlm_foreground_v2';
 
   // Incrementing notification ID
   int _nextId = 100;
 
   /// Call once during app startup.
   Future<void> init() async {
-    const androidSettings = AndroidInitializationSettings('@drawable/ic_stat_wlm');
+    const androidSettings = AndroidInitializationSettings(
+      '@drawable/ic_stat_wlm',
+    );
     const settings = InitializationSettings(android: androidSettings);
 
     await _plugin.initialize(
@@ -36,20 +39,36 @@ class NotificationService {
     );
 
     // Create the message notification channel with WLM sound.
-    final androidPlugin =
-        _plugin.resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>();
+    final androidPlugin = _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
     if (androidPlugin != null) {
       await androidPlugin.createNotificationChannel(
         const AndroidNotificationChannel(
           _msgChannelId,
           'Messages',
-          description: 'Incoming WLM messages and nudges',
+          description: 'Incoming WLM messages',
           importance: Importance.high,
-          playSound: true,
-          sound: RawResourceAndroidNotificationSound('type'),
+          playSound: false,
         ),
       );
+
+      // Delete legacy message channel that may have had sound enabled.
+      await androidPlugin.deleteNotificationChannel('wlm_messages');
+
+      await androidPlugin.createNotificationChannel(
+        const AndroidNotificationChannel(
+          _nudgeChannelId,
+          'Nudges',
+          description: 'Incoming WLM nudges',
+          importance: Importance.high,
+          playSound: false,
+        ),
+      );
+
+      // Delete legacy nudge channel that had sound (causes double-play).
+      await androidPlugin.deleteNotificationChannel('wlm_nudges');
 
       await androidPlugin.createNotificationChannel(
         const AndroidNotificationChannel(
@@ -62,14 +81,18 @@ class NotificationService {
           enableLights: false,
         ),
       );
+
+      // Delete legacy foreground channel that may have had sound enabled.
+      await androidPlugin.deleteNotificationChannel('wlm_foreground');
     }
   }
 
   /// Request POST_NOTIFICATIONS permission (Android 13+).
   Future<bool> requestPermission() async {
-    final androidPlugin =
-        _plugin.resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>();
+    final androidPlugin = _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
     if (androidPlugin == null) return false;
     return await androidPlugin.requestNotificationsPermission() ?? false;
   }
@@ -81,14 +104,15 @@ class NotificationService {
     required String senderEmail,
     String? avatarPath,
   }) async {
-    // Build large icon: avatar composited inside the Aero glass frame.
+    // Build large icon: avatar with a clean circular crop for modern Android.
     AndroidBitmap<Object>? largeIcon;
     if (avatarPath != null && File(avatarPath).existsSync()) {
-      final aeroPath = await _renderAeroAvatar(avatarPath);
-      if (aeroPath != null) {
-        largeIcon = FilePathAndroidBitmap(aeroPath);
-      } else {
-        largeIcon = FilePathAndroidBitmap(avatarPath);
+      try {
+        final renderedAvatarPath = await _renderCleanAvatar(avatarPath);
+        final effectivePath = renderedAvatarPath ?? avatarPath;
+        largeIcon = FilePathAndroidBitmap(effectivePath);
+      } catch (_) {
+        // If avatar rendering fails, skip the large icon gracefully
       }
     }
 
@@ -98,10 +122,20 @@ class NotificationService {
       channelDescription: 'Incoming WLM messages and nudges',
       importance: Importance.high,
       priority: Priority.high,
+      playSound: false,
       icon: 'ic_stat_wlm',
-      color: const Color(0xFF2B6DAD),
+      color: const Color(0xFF4A9BD9),
+      colorized: true,
       largeIcon: largeIcon,
-      styleInformation: BigTextStyleInformation(body, contentTitle: senderName),
+      subText: 'reLive Messenger',
+      ticker: '$senderName: $body',
+      category: AndroidNotificationCategory.message,
+      styleInformation: BigTextStyleInformation(
+        body,
+        contentTitle: '<b>$senderName</b>',
+        htmlFormatContentTitle: true,
+        summaryText: senderEmail,
+      ),
     );
 
     await _plugin.show(
@@ -113,17 +147,49 @@ class NotificationService {
     );
   }
 
-  /// Show a nudge notification.
+  /// Show a nudge notification with nudge-specific sound.
   Future<void> showNudgeNotification({
     required String senderName,
     required String senderEmail,
     String? avatarPath,
   }) async {
-    await showMessageNotification(
-      senderName: senderName,
-      body: '$senderName just sent you a nudge!',
-      senderEmail: senderEmail,
-      avatarPath: avatarPath,
+    AndroidBitmap<Object>? largeIcon;
+    if (avatarPath != null && File(avatarPath).existsSync()) {
+      try {
+        final renderedAvatarPath = await _renderCleanAvatar(avatarPath);
+        final effectivePath = renderedAvatarPath ?? avatarPath;
+        largeIcon = FilePathAndroidBitmap(effectivePath);
+      } catch (_) {}
+    }
+
+    final body = '$senderName just sent you a nudge!';
+    final android = AndroidNotificationDetails(
+      _nudgeChannelId,
+      'Nudges',
+      channelDescription: 'Incoming WLM nudges',
+      importance: Importance.high,
+      priority: Priority.high,
+      icon: 'ic_stat_wlm',
+      color: const Color(0xFF4A9BD9),
+      colorized: true,
+      largeIcon: largeIcon,
+      subText: 'reLive Messenger',
+      ticker: body,
+      category: AndroidNotificationCategory.message,
+      styleInformation: BigTextStyleInformation(
+        body,
+        contentTitle: '<b>$senderName</b>',
+        htmlFormatContentTitle: true,
+        summaryText: senderEmail,
+      ),
+    );
+
+    await _plugin.show(
+      _nextId++,
+      senderName,
+      body,
+      NotificationDetails(android: android),
+      payload: senderEmail,
     );
   }
 
@@ -142,6 +208,9 @@ class NotificationService {
       ongoing: true,
       autoCancel: false,
       showWhen: false,
+      playSound: false,
+      enableVibration: false,
+      silent: true,
       icon: 'ic_stat_wlm',
       color: Color(0xFF2B6DAD),
       subText: 'Aero KeepAlive',
@@ -149,7 +218,7 @@ class NotificationService {
 
     await _plugin.show(
       1, // fixed ID for the foreground notification
-      'Windows Live Messenger',
+      'reLive Messenger',
       'Connected in background',
       const NotificationDetails(android: android),
     );
@@ -169,22 +238,26 @@ class NotificationService {
     }
   }
 
-  // ── Aero-frame avatar renderer ─────────────────────────────────────────
+  // ── Aero-framed avatar renderer for notifications ──────────────────────
 
   static const _assetFrame =
       'assets/images/extracted/msgsres/carved_png_9812096.png';
 
-  /// Composites [avatarPath] inside the WLM Aero glass frame and saves a
-  /// 96×96 PNG to the temp directory. Returns the temp file path, or null
-  /// on error.
-  Future<String?> _renderAeroAvatar(String avatarPath) async {
+  /// Renders the avatar at 512×512 with the WLM aero glass frame overlay,
+  /// properly inset so the photo sits inside the frame's transparent center.
+  /// The frame is tinted green for online status.
+  Future<String?> _renderCleanAvatar(String avatarPath) async {
     try {
+      const double sz = 512;
+      // 9.35% inset matches the frame's transparent center (13px on 139px frame)
+      const double inset = sz * 0.0935;
+
       // Decode avatar
       final avatarBytes = await File(avatarPath).readAsBytes();
       final avatarCodec = await ui.instantiateImageCodec(
         avatarBytes,
-        targetWidth: 96,
-        targetHeight: 96,
+        targetWidth: 512,
+        targetHeight: 512,
       );
       final avatarFrame = await avatarCodec.getNextFrame();
       final avatarImg = avatarFrame.image;
@@ -193,47 +266,71 @@ class NotificationService {
       final frameData = await rootBundle.load(_assetFrame);
       final frameCodec = await ui.instantiateImageCodec(
         frameData.buffer.asUint8List(),
-        targetWidth: 96,
-        targetHeight: 96,
+        targetWidth: 512,
+        targetHeight: 512,
       );
-      final frameFrameResult = await frameCodec.getNextFrame();
-      final frameImg = frameFrameResult.image;
+      final frameFrame = await frameCodec.getNextFrame();
+      final frameImg = frameFrame.image;
 
-      const double sz = 96;
       final recorder = ui.PictureRecorder();
       final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, sz, sz));
 
-      // Draw avatar inset 15.5 % (mirrors AvatarWidget layout)
-      final inset = sz * 0.155;
-      final avatarDst = Rect.fromLTRB(inset, inset, sz - inset, sz - inset);
+      // Draw avatar inset within the frame area
       final avatarSrc = Rect.fromLTWH(
-        0, 0,
+        0,
+        0,
         avatarImg.width.toDouble(),
         avatarImg.height.toDouble(),
       );
-      canvas.drawImageRect(avatarImg, avatarSrc, avatarDst, Paint());
+      final avatarDst = Rect.fromLTWH(
+        inset,
+        inset,
+        sz - inset * 2,
+        sz - inset * 2,
+      );
+      canvas.drawImageRect(
+        avatarImg,
+        avatarSrc,
+        avatarDst,
+        Paint()..filterQuality = ui.FilterQuality.medium,
+      );
 
-      // Draw frame with green (online) tint using saveLayer for srcATop
-      final fullRect = Rect.fromLTWH(0, 0, sz, sz);
+      // Draw aero frame overlay with green tint for online status
       final frameSrc = Rect.fromLTWH(
-        0, 0,
+        0,
+        0,
         frameImg.width.toDouble(),
         frameImg.height.toDouble(),
       );
-      canvas.saveLayer(fullRect, Paint());
-      canvas.drawImageRect(frameImg, frameSrc, fullRect, Paint());
+      final frameDst = Rect.fromLTWH(0, 0, sz, sz);
+      canvas.drawImageRect(
+        frameImg,
+        frameSrc,
+        frameDst,
+        Paint()..filterQuality = ui.FilterQuality.medium,
+      );
+
+      // Apply subtle green tint on the frame using color blend
+      canvas.saveLayer(frameDst, Paint());
+      canvas.drawImageRect(
+        frameImg,
+        frameSrc,
+        frameDst,
+        Paint()..filterQuality = ui.FilterQuality.medium,
+      );
       canvas.drawRect(
-        fullRect,
+        frameDst,
         Paint()
-          ..color = const Color(0xD939FF14) // GFP green at ~85 % alpha
-          ..blendMode = BlendMode.srcATop,
+          ..color = const Color(0x3044BB44)
+          ..blendMode = ui.BlendMode.srcATop,
       );
       canvas.restore();
 
       final picture = recorder.endRecording();
-      final composited = await picture.toImage(96, 96);
-      final pngData =
-          await composited.toByteData(format: ui.ImageByteFormat.png);
+      final composited = await picture.toImage(512, 512);
+      final pngData = await composited.toByteData(
+        format: ui.ImageByteFormat.png,
+      );
       if (pngData == null) return null;
 
       final tempDir = await getTemporaryDirectory();

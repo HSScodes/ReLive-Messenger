@@ -7,10 +7,7 @@ import 'package:xml/xml.dart';
 import '../config/server_config.dart';
 
 class AbchRosterEntry {
-  const AbchRosterEntry({
-    required this.email,
-    required this.displayName,
-  });
+  const AbchRosterEntry({required this.email, required this.displayName});
 
   final String email;
   final String displayName;
@@ -33,7 +30,11 @@ class AbchService {
     final client = HttpClient()..connectionTimeout = ServerConfig.authTimeout;
     try {
       final candidateUris = _abchCandidateUris(host);
-      final passportCookie = _buildPassportCookie(mspAuth: mspAuth, mspProf: mspProf, sid: sid);
+      final passportCookie = _buildPassportCookie(
+        mspAuth: mspAuth,
+        mspProf: mspProf,
+        sid: sid,
+      );
       final ticketCandidates = <String>[
         if (ticket.isNotEmpty) ticket,
         if (mspAuth != null && mspAuth.isNotEmpty) mspAuth,
@@ -68,6 +69,111 @@ class AbchService {
     }
   }
 
+  /// Persist a contact to the server address book via ABContactAdd SOAP.
+  /// Returns `true` on success (`200` response without a SOAP fault).
+  Future<bool> addContact({
+    required String host,
+    required String ticket,
+    required String contactEmail,
+    String? mspAuth,
+    String? mspProf,
+    String? sid,
+    void Function(String message)? log,
+  }) async {
+    if (ticket.isEmpty && (mspAuth == null || mspAuth.isEmpty)) {
+      return false;
+    }
+
+    final client = HttpClient()..connectionTimeout = ServerConfig.authTimeout;
+    try {
+      final candidateUris = _abchCandidateUris(host);
+      final passportCookie = _buildPassportCookie(
+        mspAuth: mspAuth,
+        mspProf: mspProf,
+        sid: sid,
+      );
+      final ticketCandidates = <String>[
+        if (ticket.isNotEmpty) ticket,
+        if (mspAuth != null && mspAuth.isNotEmpty) mspAuth,
+      ];
+
+      for (final uri in candidateUris) {
+        for (final ticketValue in ticketCandidates) {
+          final soapBody = _buildAbContactAddEnvelope(
+            ticket: ticketValue,
+            contactEmail: contactEmail,
+          );
+          log?.call('ABCH ABContactAdd -> $uri for $contactEmail');
+          final ok = await _sendSoapRequest(
+            client: client,
+            uri: uri,
+            soapBody: soapBody,
+            soapAction:
+                'http://www.msn.com/webservices/AddressBook/ABContactAdd',
+            authTicket: ticketValue,
+            passportCookie: passportCookie,
+            log: log,
+          );
+          if (ok) return true;
+        }
+      }
+      return false;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  /// Generic SOAP POST that returns `true` when status is 2xx and no fault.
+  Future<bool> _sendSoapRequest({
+    required HttpClient client,
+    required Uri uri,
+    required String soapBody,
+    required String soapAction,
+    required String authTicket,
+    required String? passportCookie,
+    required void Function(String message)? log,
+  }) async {
+    try {
+      final request = await client
+          .postUrl(uri)
+          .timeout(ServerConfig.authTimeout);
+      request.headers.set(
+        HttpHeaders.contentTypeHeader,
+        'text/xml; charset=utf-8',
+      );
+      request.headers.set('SOAPAction', soapAction);
+      request.headers.set(HttpHeaders.userAgentHeader, 'MSMSGS');
+      request.add(utf8.encode(soapBody));
+
+      final response = await request.close().timeout(ServerConfig.authTimeout);
+      log?.call('ABCH response <- $uri status=${response.statusCode}');
+      final responseBody = await response.transform(utf8.decoder).join();
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        final compact = _compact(responseBody);
+        if (compact.isNotEmpty) {
+          final preview = compact.length > 260
+              ? compact.substring(0, 260)
+              : compact;
+          log?.call('ABCH non-success payload preview: $preview');
+        }
+        return false;
+      }
+      final compact = _compact(responseBody);
+      if (compact.contains('<fault') ||
+          compact.contains('authenticationfailed')) {
+        log?.call('ABCH SOAP fault in response');
+        return false;
+      }
+      return true;
+    } on TimeoutException {
+      return false;
+    } on SocketException {
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   List<Uri> _abchCandidateUris(String host) {
     return <Uri>[
       Uri(
@@ -88,8 +194,13 @@ class AbchService {
     required void Function(String message)? log,
   }) async {
     try {
-      final request = await client.postUrl(uri).timeout(ServerConfig.authTimeout);
-      request.headers.set(HttpHeaders.contentTypeHeader, 'text/xml; charset=utf-8');
+      final request = await client
+          .postUrl(uri)
+          .timeout(ServerConfig.authTimeout);
+      request.headers.set(
+        HttpHeaders.contentTypeHeader,
+        'text/xml; charset=utf-8',
+      );
       request.headers.set(
         'SOAPAction',
         'http://www.msn.com/webservices/AddressBook/ABFindAll',
@@ -103,15 +214,20 @@ class AbchService {
       if (response.statusCode < 200 || response.statusCode >= 300) {
         final compact = _compact(responseBody);
         if (compact.isNotEmpty) {
-          final preview = compact.length > 260 ? compact.substring(0, 260) : compact;
+          final preview = compact.length > 260
+              ? compact.substring(0, 260)
+              : compact;
           log?.call('ABCH non-success payload preview: $preview');
         }
         return null;
       }
 
       final compact = _compact(responseBody);
-      if (compact.contains('<fault') || compact.contains('authenticationfailed')) {
-        final preview = compact.length > 260 ? compact.substring(0, 260) : compact;
+      if (compact.contains('<fault') ||
+          compact.contains('authenticationfailed')) {
+        final preview = compact.length > 260
+            ? compact.substring(0, 260)
+            : compact;
         log?.call('ABCH SOAP fault preview: $preview');
       }
       return responseBody;
@@ -124,7 +240,47 @@ class AbchService {
     }
   }
 
-    String _buildAbFindAllEnvelope({required String ticket}) {
+  String _buildAbContactAddEnvelope({
+    required String ticket,
+    required String contactEmail,
+  }) {
+    final escapedTicket = _escapeXmlText(ticket);
+    final escapedEmail = _escapeXmlText(contactEmail);
+    return '''<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soapenc="http://schemas.xmlsoap.org/soap/encoding/">
+    <soap:Header>
+        <ABApplicationHeader xmlns="http://www.msn.com/webservices/AddressBook">
+            <ApplicationId>CFE80F9D-180F-4399-82AB-413F33A1FA11</ApplicationId>
+            <IsMigration>false</IsMigration>
+            <PartnerScenario>ContactSave</PartnerScenario>
+        </ABApplicationHeader>
+        <ABAuthHeader xmlns="http://www.msn.com/webservices/AddressBook">
+            <ManagedGroupRequest>false</ManagedGroupRequest>
+            <TicketToken>$escapedTicket</TicketToken>
+        </ABAuthHeader>
+    </soap:Header>
+    <soap:Body>
+        <ABContactAdd xmlns="http://www.msn.com/webservices/AddressBook">
+            <abId>00000000-0000-0000-0000-000000000000</abId>
+            <contacts>
+                <Contact xmlns="http://www.msn.com/webservices/AddressBook">
+                    <contactInfo>
+                        <contactType>LivePending</contactType>
+                        <passportName>$escapedEmail</passportName>
+                        <isMessengerUser>true</isMessengerUser>
+                    </contactInfo>
+                </Contact>
+            </contacts>
+            <options>
+                <EnableAllowListManagement>true</EnableAllowListManagement>
+            </options>
+        </ABContactAdd>
+    </soap:Body>
+</soap:Envelope>
+''';
+  }
+
+  String _buildAbFindAllEnvelope({required String ticket}) {
     final escapedTicket = _escapeXmlText(ticket);
     return '''<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soapenc="http://schemas.xmlsoap.org/soap/encoding/">
@@ -193,16 +349,17 @@ class AbchService {
           continue;
         }
 
-        final displayName = _firstElementText(contact, <String>[
+        final displayName =
+            _firstElementText(contact, <String>[
               'displayname',
               'name',
               'nickname',
             ]) ??
-          email;
+            email;
 
         final safeDisplayName = _isLikelyDisplayName(displayName)
             ? displayName
-          : email;
+            : email;
 
         final normalizedEmail = email.toLowerCase();
         if (normalizedEmail == owner || normalizedEmail.contains('hotmail')) {
@@ -259,7 +416,9 @@ class AbchService {
   }
 
   bool _looksLikeEmail(String value) {
-    return RegExp(r'^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$').hasMatch(value);
+    return RegExp(
+      r'^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$',
+    ).hasMatch(value);
   }
 
   bool _isLikelyDisplayName(String value) {
@@ -284,7 +443,12 @@ class AbchService {
   }
 
   String _compact(String value) {
-    return value.replaceAll('\r', ' ').replaceAll('\n', ' ').replaceAll(RegExp(r'\s+'), ' ').trim().toLowerCase();
+    return value
+        .replaceAll('\r', ' ')
+        .replaceAll('\n', ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim()
+        .toLowerCase();
   }
 
   String _escapeXmlText(String value) {

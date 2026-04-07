@@ -20,8 +20,7 @@ class AvatarWidget extends StatelessWidget {
 
   static const _assetFrame =
       'assets/images/extracted/msgsres/carved_png_9812096.png';
-  static const _assetPlaceholder =
-      'assets/images/extracted/msgsres/carved_png_9801032.png';
+  static const _assetPlaceholder = 'assets/images/usertiles/new_default.png';
 
   @override
   Widget build(BuildContext context) {
@@ -31,48 +30,39 @@ class AvatarWidget extends StatelessWidget {
     return SizedBox(
       width: size,
       height: size,
-      child: Stack(clipBehavior: Clip.none, children: [
-        // Photo / placeholder layer – inset ~10% to sit inside the frame's
-        // transparent center (matches new frame border of ~10%).
-        Positioned(
-          top: size * 0.10, left: size * 0.10,
-          right: size * 0.10, bottom: size * 0.10,
-          child: Opacity(
-            opacity: online ? 1.0 : 0.45,
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(size * 0.06),
-              child: _buildPhoto(),
-            ),
-          ),
-        ),
-        // Aero glass frame — light tint preserving glass highlights
-        Positioned.fill(
-          child: Opacity(
-            opacity: online ? 1.0 : 0.6,
-            child: ColorFiltered(
-              colorFilter: ColorFilter.mode(
-                tint.withValues(alpha: 0.45),
-                BlendMode.srcATop,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          // Photo / placeholder layer – inset 9.35% to match the frame's
+          // transparent center (13px border on 139px frame).
+          Positioned(
+            top: size * 0.0935,
+            left: size * 0.0935,
+            right: size * 0.0935,
+            bottom: size * 0.0935,
+            child: Opacity(
+              opacity: online ? 1.0 : 0.45,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(size * 0.04),
+                child: _buildPhoto(),
               ),
-              child: Image.asset(_assetFrame, fit: BoxFit.fill),
             ),
           ),
-        ),
-        // Status glow edge (thin colored border matching WLM 2009 look)
-        Positioned.fill(
-          child: IgnorePointer(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(size * 0.12),
-                border: Border.all(
-                  color: tint.withValues(alpha: online ? 0.7 : 0.3),
-                  width: size * 0.02,
+          // Aero glass frame — gentle tint preserving glass highlights
+          Positioned.fill(
+            child: Opacity(
+              opacity: online ? 1.0 : 0.6,
+              child: ColorFiltered(
+                colorFilter: ColorFilter.mode(
+                  tint.withValues(alpha: 0.35),
+                  BlendMode.srcATop,
                 ),
+                child: Image.asset(_assetFrame, fit: BoxFit.fill),
               ),
             ),
           ),
-        ),
-      ]),
+        ],
+      ),
     );
   }
 
@@ -82,7 +72,7 @@ class AvatarWidget extends StatelessWidget {
       return Image.file(
         File(path),
         fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) =>
+        errorBuilder: (_, _, _) =>
             Image.asset(_assetPlaceholder, fit: BoxFit.cover),
       );
     }

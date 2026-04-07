@@ -111,7 +111,7 @@ class EmoticonDef {
 
 /// Lazily built shortcode → index lookup (case-sensitive because WLM codes
 /// are case-sensitive between e.g. (L) / (l)).
-late final Map<String, int> _codeToIndex = () {
+final Map<String, int> _codeToIndex = () {
   final map = <String, int>{};
   for (final def in emoticonDefs) {
     for (final code in def.codes) {
@@ -125,7 +125,7 @@ late final Map<String, int> _codeToIndex = () {
 int? emoticonIndex(String code) => _codeToIndex[code];
 
 /// All known shortcodes sorted longest-first (for greedy matching).
-late final List<String> allEmoticonCodes = () {
+final List<String> allEmoticonCodes = () {
   final codes = _codeToIndex.keys.toList()
     ..sort((a, b) => b.length.compareTo(a.length));
   return codes;

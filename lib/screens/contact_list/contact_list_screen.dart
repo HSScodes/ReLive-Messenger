@@ -16,7 +16,7 @@ class ContactListScreen extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Windows Live Messenger'),
+        title: const Text('reLive Messenger'),
         backgroundColor: const Color(0xFF5BAFE3),
       ),
       body: Container(

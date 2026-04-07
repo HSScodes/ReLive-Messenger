@@ -26,9 +26,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
   static const String _assetDropdownArrow =
     'assets/images/extracted/msgsres/carved_png_10968848.png';
   static const String _assetAvatarFrame =
-    'assets/images/extracted/msgsres/carved_png_9812096.png';
+    'assets/images/extracted/aeroframe_transparent.png';
   static const String _assetAvatarUser =
-    'assets/images/extracted/msgsres/carved_png_9801032.png';
+    'assets/images/extracted/default_avatar_hd.png';
   static const String _assetCheckboxOff =
     'assets/images/extracted/msgsres/carved_png_9797544.png';
   static const String _assetCheckboxOn =
@@ -176,7 +176,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
     final authState = ref.watch(authProvider);
 
     return Scaffold(
-      backgroundColor: const Color(0xFFB8CFDB),
+      backgroundColor: const Color(0xFFD0E4F0),
       body: LayoutBuilder(
         builder: (context, constraints) {
           final pageHeight = constraints.maxHeight < 720 ? 720.0 : constraints.maxHeight;
@@ -198,10 +198,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                             begin: Alignment.topCenter,
                             end: Alignment.bottomCenter,
                             colors: [
-                              Color(0xFFD5E4ED),
-                              Color(0xFFC2D6E1),
-                              Color(0xFFB5CCD8),
+                              Color(0xFF53B8EA),
+                              Color(0xFF7ECDF2),
+                              Color(0xFFB0DFF5),
+                              Color(0xFFDBEFF8),
                             ],
+                            stops: [0.0, 0.18, 0.45, 1.0],
                           ),
                         ),
                       ),
@@ -211,109 +213,82 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                       left: 0,
                       right: 0,
                       child: Container(
-                        height: 64,
+                        height: 56,
                         decoration: const BoxDecoration(
                           gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
                             colors: [
-                              Color(0xFF69B5DE),
-                              Color(0xFF2E8DC6),
-                              Color(0xFF1F6EA6),
+                              Color(0xFF1A4978),
+                              Color(0xFF3A8CC4),
+                              Color(0xFF5CAEE0),
+                              Color(0xFF2F7CB5),
                             ],
+                            stops: [0.0, 0.40, 0.55, 1.0],
                           ),
+                          border: Border(top: BorderSide(color: Color(0x33FFFFFF), width: 1)),
                         ),
                       ),
                     ),
                     Positioned(
-                      top: 64,
+                      top: 56,
                       left: 0,
                       right: 0,
                       bottom: 45,
                       child: Center(
                         child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 350),
-                          child: Padding(
-                            padding: const EdgeInsets.fromLTRB(10, 12, 10, 18),
+                          constraints: const BoxConstraints(maxWidth: 370),
+                          child: Container(
+                            margin: const EdgeInsets.fromLTRB(14, 16, 14, 18),
+                            padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                                colors: [
+                                  Colors.white.withOpacity(0.55),
+                                  Colors.white.withOpacity(0.40),
+                                  Colors.white.withOpacity(0.50),
+                                ],
+                                stops: const [0.0, 0.5, 1.0],
+                              ),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: Colors.white.withOpacity(0.65),
+                                width: 1.2,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: const Color(0xFF1A4978).withOpacity(0.12),
+                                  blurRadius: 16,
+                                  offset: const Offset(0, 6),
+                                ),
+                              ],
+                            ),
                             child: Column(
+                              mainAxisSize: MainAxisSize.min,
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
                               Center(
                                 child: SizedBox(
-                                  width: 139,
-                                  height: 139,
+                                  width: 160,
+                                  height: 160,
                                   child: Stack(
                                     alignment: Alignment.center,
                                     children: [
                                       Positioned(
-                                        top: 14, left: 14, right: 14, bottom: 14,
+                                        top: 25, left: 25, right: 20, bottom: 20,
                                         child: ClipRRect(
-                                          borderRadius: BorderRadius.circular(4),
-                                          child: Image.asset(_assetAvatarUser, fit: BoxFit.cover),
+                                          borderRadius: BorderRadius.circular(10),
+                                          child: Image.asset(_assetAvatarUser, fit: BoxFit.cover, filterQuality: FilterQuality.medium),
                                         ),
                                       ),
                                       Positioned.fill(
-                                        child: Image.asset(_assetAvatarFrame, fit: BoxFit.fill),
+                                        child: Image.asset(_assetAvatarFrame, fit: BoxFit.fill, filterQuality: FilterQuality.medium),
                                       ),
                                     ],
                                   ),
                                 ),
                               ),
-                              const SizedBox(height: 4),
-                              Align(
-                                alignment: Alignment.centerRight,
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    const Text(
-                                      'Help',
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        color: Color(0xFF35566A),
-                                        fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
-                                      ),
-                                    ),
-                                    const SizedBox(width: 4),
-                                    Image.asset(_assetHelpIcon, width: 16, height: 16),
-                                    const SizedBox(width: 2),
-                                    Image.asset(_assetDropdownArrow, width: 16, height: 16),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              const Center(
-                                child: Text(
-                                  'Sign in',
-                                  style: TextStyle(
-                                    fontSize: 20,
-                                    color: Color(0xFF2D5A92),
-                                    fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              const Center(
-                                child: Text(
-                                  'Sign in with your Windows Live ID. Don\'t have one?',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    color: Color(0xFF2A3B46),
-                                    fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 2),
-                              const Center(
-                                child: Text(
-                                  'Sign up.',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    color: Color(0xFF0067C6),
-                                    fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 14),
+                              const SizedBox(height: 16),
                               _emailComboField(),
                               const SizedBox(height: 8),
                               _classicTextField(
@@ -376,32 +351,24 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                                   });
                                 },
                               ),
-                              const SizedBox(height: 6),
-                              const Text(
-                                'Forgot your password?',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: Color(0xFF0067C6),
-                                  fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
-                                ),
-                              ),
-                              const SizedBox(height: 10),
+                              const SizedBox(height: 14),
                               Center(
                                 child: SizedBox(
                                   width: 148,
-                                  height: 34,
-                                  child: OutlinedButton(
+                                  height: 40,
+                                  child: ElevatedButton(
                                     onPressed: authState.isLoading ? null : _onSignIn,
-                                    style: OutlinedButton.styleFrom(
-                                      side: const BorderSide(color: Color(0xFF5183A6)),
-                                      backgroundColor: const Color(0xFFE3EFF5),
-                                      foregroundColor: const Color(0xFF233E4D),
-                                      shape: const RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.zero,
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: const Color(0xFF3A8CC4),
+                                      foregroundColor: Colors.white,
+                                      elevation: 2,
+                                      shadowColor: const Color(0xFF1A4978).withOpacity(0.3),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(20),
                                       ),
-                                      padding: EdgeInsets.zero,
                                       textStyle: const TextStyle(
                                         fontSize: 15,
+                                        fontWeight: FontWeight.w600,
                                         fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
                                       ),
                                     ),
@@ -409,7 +376,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                                         ? const SizedBox(
                                             width: 16,
                                             height: 16,
-                                            child: CircularProgressIndicator(strokeWidth: 2),
+                                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                                           )
                                         : const Text('Sign in'),
                                   ),
@@ -418,8 +385,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                               if (authState.error != null) ...[
                                 const SizedBox(height: 8),
                                 Text(
-                                  authState.error!,
+                                  authState.error!
+                                      .replaceAll('CrossTalk', 'server')
+                                      .replaceAll('crosstalk', 'server')
+                                      .replaceAll('Microsoft', '')
+                                      .replaceAll('microsoft', ''),
                                   style: const TextStyle(fontSize: 12, color: Color(0xFF9A2525)),
+                                  textAlign: TextAlign.center,
                                 ),
                               ],
                               ],
@@ -446,11 +418,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
 
   Widget _emailComboField() {
     return Container(
-      height: 34,
+      height: 36,
       decoration: BoxDecoration(
         color: Colors.white,
-        border: Border.all(color: const Color(0xFF87A6BD)),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFB0C8D8)),
       ),
+      clipBehavior: Clip.antiAlias,
       child: Row(
         children: [
           Expanded(
@@ -519,11 +493,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
 
   Widget _statusDropdown() {
     return Container(
-      height: 29,
+      height: 32,
       padding: const EdgeInsets.only(left: 8, right: 4),
       decoration: BoxDecoration(
         color: const Color(0xFFF3F7FA),
-        border: Border.all(color: const Color(0xFF87A6BD)),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFB0C8D8)),
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
@@ -574,44 +549,40 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
 
   Widget _footerBar() {
     return Container(
-      height: 45,
+      height: 42,
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Stack(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Colors.white.withOpacity(0.0),
+            Colors.white.withOpacity(0.25),
+          ],
+        ),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: Image.asset(
-              _assetBottomGlassBar,
-              height: 25,
-              fit: BoxFit.fill,
+          const Text(
+            'Privacy statement',
+            style: TextStyle(
+              fontSize: 13,
+              color: Color(0xFF1A5C8A),
+              fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
             ),
           ),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Text(
-                'Privacy statement',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Color(0xFF0067C6),
-                  fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
-                ),
-              ),
-              const SizedBox(width: 10),
-              Container(width: 1, height: 16, color: const Color(0xFF97AAB6)),
-              const SizedBox(width: 10),
-              const Text(
-                'Server status',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Color(0xFF0067C6),
-                  fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
-                ),
-              ),
-            ],
+          const SizedBox(width: 10),
+          Container(width: 1, height: 14, color: const Color(0xFF97AAB6)),
+          const SizedBox(width: 10),
+          const Text(
+            'Server status',
+            style: TextStyle(
+              fontSize: 13,
+              color: Color(0xFF1A5C8A),
+              fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
+            ),
           ),
         ],
       ),
@@ -656,13 +627,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                   : null),
           fillColor: Colors.white,
           filled: true,
-          enabledBorder: const OutlineInputBorder(
-            borderRadius: BorderRadius.zero,
-            borderSide: BorderSide(color: Color(0xFF87A6BD)),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: const BorderSide(color: Color(0xFFB0C8D8)),
           ),
-          focusedBorder: const OutlineInputBorder(
-            borderRadius: BorderRadius.zero,
-            borderSide: BorderSide(color: Color(0xFF5E8FB3)),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: const BorderSide(color: Color(0xFF5E8FB3)),
           ),
         ),
         cursorColor: const Color(0xFF356C8F),

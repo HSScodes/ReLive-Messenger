@@ -48,7 +48,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get syncingContacts => 'Syncing contact list...';
 
   @override
-  String get windowsLiveMessenger => 'Windows Live Messenger';
+  String get windowsLiveMessenger => 'reLive Messenger';
 
   @override
   String get changeStatus => 'Change status';

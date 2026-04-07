@@ -34,8 +34,7 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
   // ── Asset paths ────────────────────────────────────────────────────────
   static const _assetAvatarFrame =
       'assets/images/extracted/msgsres/carved_png_9812096.png';
-  static const _assetAvatarUser =
-      'assets/images/extracted/msgsres/carved_png_9801032.png';
+  static const _assetAvatarUser = 'assets/images/usertiles/new_default.png';
   static const _assetArrow =
       'assets/images/extracted/msgsres/carved_png_10968848.png';
 
@@ -51,9 +50,9 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
       'assets/images/extracted/msgsres/carved_png_9380960.png';
   static const _assetStatusOffline =
       'assets/images/extracted/msgsres/carved_png_9394296.png';
-    static const _assetAddContact =
+  static const _assetAddContact =
       'assets/images/extracted/msgsres/carved_png_11071608.png';
-    static const _assetBuddyGreen =
+  static const _assetBuddyGreen =
       'assets/images/extracted/msgsres/carved_png_9375216.png';
 
   // ── State ──────────────────────────────────────────────────────────────
@@ -126,31 +125,53 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
     return const Color(0xFF53B8EA);
   }
 
-  Widget _img(String asset,
-      {double? w, double? h, BoxFit fit = BoxFit.contain}) {
-    return Image.asset(asset,
+  Widget _img(
+    String asset, {
+    double? w,
+    double? h,
+    BoxFit fit = BoxFit.contain,
+  }) {
+    return Image.asset(
+      asset,
+      width: w,
+      height: h,
+      fit: fit,
+      errorBuilder: (_, _, _) => SizedBox(
         width: w,
         height: h,
-        fit: fit,
-        errorBuilder: (_, __, ___) => SizedBox(
-            width: w,
-            height: h,
-            child: const Icon(Icons.image_not_supported,
-                size: 14, color: Color(0xFF4F6E88))));
+        child: const Icon(
+          Icons.image_not_supported,
+          size: 14,
+          color: Color(0xFF4F6E88),
+        ),
+      ),
+    );
   }
 
   Widget _contactAvatarImg(Contact c, {required bool online}) {
     // Prefer DDP (dynamic display picture / animated GIF) over static avatar.
     final p = c.ddpLocalPath ?? c.avatarLocalPath;
     if (p != null && p.isNotEmpty && File(p).existsSync()) {
-      return Image.file(File(p), fit: BoxFit.cover);
+      return Image.file(
+        File(p),
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) =>
+            Image.asset(_assetAvatarUser, fit: BoxFit.cover),
+      );
     }
     return Image.asset(_assetAvatarUser, fit: BoxFit.cover);
   }
 
   Widget _selfAvatarImg(String? path) {
     if (path != null && path.isNotEmpty && File(path).existsSync()) {
-      return Image.file(File(path), width: 46, height: 46, fit: BoxFit.cover);
+      return Image.file(
+        File(path),
+        width: 46,
+        height: 46,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) =>
+            _img(_assetAvatarUser, w: 46, h: 46, fit: BoxFit.cover),
+      );
     }
     return _img(_assetAvatarUser, w: 46, h: 46, fit: BoxFit.cover);
   }
@@ -173,71 +194,96 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
         PopupMenuItem<String>(
           value: s.name,
           height: 32,
-          child: Row(children: [
-            _img(_statusAsset(s), w: 14, h: 14),
-            const SizedBox(width: 10),
-            Text(_statusLabel(context, s),
+          child: Row(
+            children: [
+              _img(_statusAsset(s), w: 14, h: 14),
+              const SizedBox(width: 10),
+              Text(
+                _statusLabel(context, s),
                 style: const TextStyle(
-                    fontSize: 14,
-                    color: Color(0xFF1B2A38),
-                    fontFamilyFallback: ['Segoe UI', 'Tahoma'])),
-          ]),
+                  fontSize: 14,
+                  color: Color(0xFF1B2A38),
+                  fontFamilyFallback: ['Segoe UI', 'Tahoma'],
+                ),
+              ),
+            ],
+          ),
         ),
       const PopupMenuDivider(height: 1),
       // Sign out
       PopupMenuItem<String>(
         value: 'signout',
         height: 32,
-        child: Row(children: [
-          const SizedBox(width: 24),
-          Expanded(
-            child: Text(l10n.signOutHere,
+        child: Row(
+          children: [
+            const SizedBox(width: 24),
+            Expanded(
+              child: Text(
+                l10n.signOutHere,
                 style: const TextStyle(
-                    fontSize: 14,
-                    color: Color(0xFF1B2A38),
-                    fontFamilyFallback: ['Segoe UI', 'Tahoma'])),
-          ),
-        ]),
+                  fontSize: 14,
+                  color: Color(0xFF1B2A38),
+                  fontFamilyFallback: ['Segoe UI', 'Tahoma'],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
       const PopupMenuDivider(height: 1),
       // Change display picture
       PopupMenuItem<String>(
         value: 'change_dp',
         height: 30,
-        child: Row(children: [
-          const SizedBox(width: 24),
-          Text(l10n.changeDisplayPicture,
+        child: Row(
+          children: [
+            const SizedBox(width: 24),
+            Text(
+              l10n.changeDisplayPicture,
               style: const TextStyle(
-                  fontSize: 14,
-                  color: Color(0xFF1B2A38),
-                  fontFamilyFallback: ['Segoe UI', 'Tahoma'])),
-        ]),
+                fontSize: 14,
+                color: Color(0xFF1B2A38),
+                fontFamilyFallback: ['Segoe UI', 'Tahoma'],
+              ),
+            ),
+          ],
+        ),
       ),
       // Change scene
       PopupMenuItem<String>(
         value: 'change_scene',
         height: 30,
-        child: Row(children: [
-          const SizedBox(width: 24),
-          Text(l10n.changeScene,
+        child: Row(
+          children: [
+            const SizedBox(width: 24),
+            Text(
+              l10n.changeScene,
               style: const TextStyle(
-                  fontSize: 14,
-                  color: Color(0xFF1B2A38),
-                  fontFamilyFallback: ['Segoe UI', 'Tahoma'])),
-        ]),
+                fontSize: 14,
+                color: Color(0xFF1B2A38),
+                fontFamilyFallback: ['Segoe UI', 'Tahoma'],
+              ),
+            ),
+          ],
+        ),
       ),
       // Change display name
       PopupMenuItem<String>(
         value: 'change_name',
         height: 30,
-        child: Row(children: [
-          const SizedBox(width: 24),
-          Text(l10n.changeDisplayName,
+        child: Row(
+          children: [
+            const SizedBox(width: 24),
+            Text(
+              l10n.changeDisplayName,
               style: const TextStyle(
-                  fontSize: 14,
-                  color: Color(0xFF1B2A38),
-                  fontFamilyFallback: ['Segoe UI', 'Tahoma'])),
-        ]),
+                fontSize: 14,
+                color: Color(0xFF1B2A38),
+                fontFamilyFallback: ['Segoe UI', 'Tahoma'],
+              ),
+            ),
+          ],
+        ),
       ),
     ];
 
@@ -311,9 +357,9 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
     final client = ref.watch(msnpClientProvider);
 
     // Pre-compute stripped sort keys once per contact (avoid regex in comparators).
-    final _sortKeys = <String, String>{};
+    final sortKeys = <String, String>{};
     String sortKeyOf(Contact c) =>
-        _sortKeys[c.email] ??= stripWlmColorTags(c.displayName).toLowerCase();
+        sortKeys[c.email] ??= stripWlmColorTags(c.displayName).toLowerCase();
 
     // Partition contacts
     final online = <Contact>[];
@@ -327,10 +373,12 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
     List<Contact> filter(List<Contact> l) => q.isEmpty
         ? l
         : l
-            .where((c) =>
-                sortKeyOf(c).contains(q) ||
-                c.email.toLowerCase().contains(q))
-            .toList();
+              .where(
+                (c) =>
+                    sortKeyOf(c).contains(q) ||
+                    c.email.toLowerCase().contains(q),
+              )
+              .toList();
 
     final fOn = filter(online)
       ..sort((a, b) => sortKeyOf(a).compareTo(sortKeyOf(b)));
@@ -340,15 +388,21 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
     // Build favorites list from all contacts
     final contactsNotifier = ref.read(contactsProvider.notifier);
     final favEmails = contactsNotifier.favoriteEmails;
-    final fFav = contacts
-        .where((c) => favEmails.contains(c.email.toLowerCase()))
-        .toList()
-      ..sort((a, b) => sortKeyOf(a).compareTo(sortKeyOf(b)));
+    final fFav =
+        contacts
+            .where((c) => favEmails.contains(c.email.toLowerCase()))
+            .toList()
+          ..sort((a, b) => sortKeyOf(a).compareTo(sortKeyOf(b)));
 
     final displayName = client.selfDisplayName;
     final psm = client.selfPsm;
     final selfStatus = client.selfPresence;
     final topThemeColor = _mainThemeTopColor(client.selfColorScheme);
+    // Lightened variant for smooth 4-stop background gradient
+    final hsl = HSLColor.fromColor(topThemeColor);
+    final lightenedTheme = hsl
+        .withLightness((hsl.lightness + 0.20).clamp(0.0, 0.92))
+        .toColor();
 
     return Scaffold(
       body: Container(
@@ -358,118 +412,133 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
             end: Alignment.bottomCenter,
             colors: [
               topThemeColor,
+              lightenedTheme,
+              const Color(0xFFF0F6FA),
               const Color(0xFFFFFFFF),
             ],
-            stops: [0.0, 0.30],
+            stops: const [0.0, 0.15, 0.40, 0.85],
           ),
         ),
         child: SafeArea(
-          child: Column(children: [
-            // ── Title bar ──
-            _titleBar(),
-            // ── Profile header ──
-            _profileHeader(
+          child: Column(
+            children: [
+              // ── Title bar ──
+              _titleBar(),
+              // ── Scene area (profile + search — scene extends behind both) ──
+              _sceneArea(
                 displayName: displayName,
                 avatarPath: selfAvatarPath,
                 psm: psm,
-                selfStatus: selfStatus),
-            // ── Search + Add Contact ──
-            Row(
-              children: [
-                Expanded(child: _searchBar()),
-                Padding(
-                  padding: const EdgeInsets.only(right: 6, top: 6),
-                  child: GestureDetector(
-                    onTap: _showAddContactDialog,
-                    child: SizedBox(
-                      width: 32,
-                      height: 32,
-                      child: Stack(
-                        clipBehavior: Clip.none,
-                        children: [
-                          Center(
-                            child: Image.asset(
-                              _assetBuddyGreen,
-                              width: 28,
-                              height: 28,
-                              filterQuality: FilterQuality.medium,
-                            ),
+                selfStatus: selfStatus,
+              ),
+              // ── Contact list ──
+              Expanded(
+                child: Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+                  clipBehavior: Clip.antiAlias,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: const Color(0x40FFFFFF),
+                      width: 1.2,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF2060A0).withOpacity(0.10),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: BackdropFilter(
+                      filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.white.withOpacity(0.78),
+                              Colors.white.withOpacity(0.88),
+                              Colors.white.withOpacity(0.92),
+                            ],
+                            stops: const [0.0, 0.3, 1.0],
                           ),
-                          Positioned(
-                            right: -1,
-                            bottom: 0,
-                            child: Image.asset(
-                              _assetAddContact,
-                              width: 14,
-                              height: 14,
-                              filterQuality: FilterQuality.medium,
-                            ),
+                        ),
+                        child: ListView(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
                           ),
-                        ],
+                          children: [
+                            _group(
+                              l10n.contactsFavorites,
+                              fFav.length,
+                              _favExpanded,
+                              () =>
+                                  setState(() => _favExpanded = !_favExpanded),
+                              [
+                                for (final c in fFav)
+                                  _tile(
+                                    c,
+                                    online:
+                                        c.status !=
+                                        PresenceStatus.appearOffline,
+                                  ),
+                              ],
+                            ),
+                            _group(
+                              l10n.contactsGroups,
+                              0,
+                              _grpExpanded,
+                              () =>
+                                  setState(() => _grpExpanded = !_grpExpanded),
+                              [],
+                            ),
+                            _group(
+                              l10n.contactsAvailable,
+                              fOn.length,
+                              _onExpanded,
+                              () => setState(() => _onExpanded = !_onExpanded),
+                              [for (final c in fOn) _tile(c, online: true)],
+                            ),
+                            _group(
+                              l10n.contactsOffline,
+                              fOff.length,
+                              _offExpanded,
+                              () =>
+                                  setState(() => _offExpanded = !_offExpanded),
+                              [for (final c in fOff) _tile(c, online: false)],
+                            ),
+                            if (contacts.isEmpty)
+                              Padding(
+                                padding: EdgeInsets.only(top: 12),
+                                child: Text(
+                                  l10n.syncingContacts,
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: Color(0xFF5D6D7A),
+                                    fontFamilyFallback: [
+                                      'Segoe UI',
+                                      'Tahoma',
+                                      'Arial',
+                                    ],
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ],
-            ),
-            // ── Contact list ──
-            Expanded(
-              child: Container(
-                width: double.infinity,
-                margin: const EdgeInsets.fromLTRB(6, 0, 6, 6),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.85),
-                  border: Border.all(color: const Color(0xFF88B3D4)),
-                  borderRadius: BorderRadius.circular(3),
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(0xFF3A7DB8).withOpacity(0.08),
-                      blurRadius: 4,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: ListView(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  children: [
-                    _group(l10n.contactsFavorites, fFav.length, _favExpanded,
-                        () => setState(() => _favExpanded = !_favExpanded),
-                        [for (final c in fFav) _tile(c, online: c.status != PresenceStatus.appearOffline)]),
-                    _group(l10n.contactsGroups, 0, _grpExpanded,
-                        () => setState(() => _grpExpanded = !_grpExpanded), []),
-                    _group(
-                      l10n.contactsAvailable,
-                        fOn.length,
-                        _onExpanded,
-                        () => setState(() => _onExpanded = !_onExpanded),
-                        [for (final c in fOn) _tile(c, online: true)]),
-                    _group(
-                      l10n.contactsOffline,
-                        fOff.length,
-                        _offExpanded,
-                        () => setState(() => _offExpanded = !_offExpanded),
-                        [for (final c in fOff) _tile(c, online: false)]),
-                    if (contacts.isEmpty)
-                      Padding(
-                        padding: EdgeInsets.only(top: 12),
-                      child: Text(l10n.syncingContacts,
-                            style: TextStyle(
-                                fontSize: 14,
-                                color: Color(0xFF5D6D7A),
-                                fontFamilyFallback: [
-                                  'Segoe UI',
-                                  'Tahoma',
-                                  'Arial'
-                                ])),
-                      ),
-                  ],
-                ),
               ),
-            ),
-            // ── Bottom bar ──
-            _bottomBar(),
-          ]),
+              // (bottom bar removed — more space for contacts)
+            ],
+          ),
         ),
       ),
     );
@@ -485,19 +554,36 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 10),
       decoration: const BoxDecoration(
         gradient: LinearGradient(
-            colors: [Color(0xFF1E4F82), Color(0xFF2B78B5)]),
+          colors: [
+            Color(0xFF1A4978),
+            Color(0xFF3A8CC4),
+            Color(0xFF5CAEE0),
+            Color(0xFF2F7CB5),
+          ],
+          stops: [0.0, 0.40, 0.55, 1.0],
+        ),
+        border: Border(top: BorderSide(color: Color(0x33FFFFFF), width: 1)),
       ),
-      child: Row(children: [
-        _img(_assetToolbarC, w: 14, h: 14),
-        const SizedBox(width: 8),
-        Text(l10n.windowsLiveMessenger,
-          style: const TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-                fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'])),
-        const Spacer(),
-
-      ]),
+      child: Row(
+        children: [
+          Image.asset(
+            'assets/images/extracted/app_logo_24.png',
+            width: 20,
+            height: 20,
+            filterQuality: FilterQuality.medium,
+          ),
+          const SizedBox(width: 8),
+          Text(
+            l10n.windowsLiveMessenger,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 16,
+              fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
+            ),
+          ),
+          const Spacer(),
+        ],
+      ),
     );
   }
 
@@ -518,13 +604,14 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
         borderRadius: BorderRadius.circular(2),
       ),
       alignment: Alignment.center,
-      child: Text(t,
-          style: const TextStyle(
-              color: Colors.white,
-              fontSize: 13,
-              shadows: [
-                Shadow(color: Color(0x60000000), blurRadius: 2)
-              ])),
+      child: Text(
+        t,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 13,
+          shadows: [Shadow(color: Color(0x60000000), blurRadius: 2)],
+        ),
+      ),
     );
   }
 
@@ -535,23 +622,63 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
   BoxDecoration _defaultHeaderDecoration() {
     return const BoxDecoration(
       gradient: LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
         colors: [
-          Color(0xFFD4F0FD),
-          Color(0xFFA2DDF7),
-          Color(0xFF82D0F0),
-          Color(0xFF6EC5EB),
+          Color(0xFF6BB8E8),
+          Color(0xFF8ECDF0),
+          Color(0xFFB8D9ED),
+          Color(0xFFE4F0F8),
         ],
-        stops: [0.0, 0.3, 0.6, 1.0],
+        stops: [0.0, 0.30, 0.55, 1.0],
       ),
-      border: Border(
-        bottom: BorderSide(color: Color(0x40FFFFFF), width: 1),
-      ),
+      border: Border(bottom: BorderSide(color: Color(0x40FFFFFF), width: 1)),
     );
   }
 
-  Widget _profileHeader({
+  // ═════════════════════════════════════════════════════════════════════════
+  //  SCENE AREA  (scene background wrapping profile card + search bar)
+  // ═════════════════════════════════════════════════════════════════════════
+
+  /// Builds the scene decoration based on user's scene/color choices.
+  BoxDecoration _sceneDecoration(String scene, String cs) {
+    if (scene.isNotEmpty) {
+      final assetPath = scene.contains('/')
+          ? scene
+          : 'assets/images/scenes/$scene';
+      return BoxDecoration(
+        image: DecorationImage(
+          image: AssetImage(assetPath),
+          fit: BoxFit.cover,
+          alignment: Alignment.topCenter,
+          onError: (_, _) {},
+        ),
+      );
+    } else if (cs.isNotEmpty && cs != '-1') {
+      final parsed = int.tryParse(cs);
+      if (parsed != null && parsed != 0) {
+        final rgb = parsed < 0 ? (0xFFFFFF + parsed + 1) : parsed;
+        final baseColor = Color(0xFF000000 | (rgb & 0xFFFFFF));
+        final hsl = HSLColor.fromColor(baseColor);
+        final lighter = hsl
+            .withLightness((hsl.lightness + 0.25).clamp(0.0, 0.95))
+            .toColor();
+        final lightest = hsl
+            .withLightness((hsl.lightness + 0.45).clamp(0.0, 0.97))
+            .toColor();
+        return BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [lightest, lighter, baseColor],
+          ),
+        );
+      }
+    }
+    return _defaultHeaderDecoration();
+  }
+
+  Widget _sceneArea({
     required String displayName,
     required String? avatarPath,
     required String psm,
@@ -563,237 +690,288 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
     final selfScene = client.selfScene;
     final selfColorScheme = client.selfColorScheme;
 
-    // Determine background decoration based on selected scene/color
-    BoxDecoration headerDecoration;
-    final scene = selfScene;
-    final cs = selfColorScheme;
+    final sceneDecor = _sceneDecoration(selfScene, selfColorScheme);
 
-    if (scene.isNotEmpty) {
-      // Scene image as background
-      final assetPath = scene.contains('/')
-          ? scene
-          : 'assets/images/scenes/$scene';
-      headerDecoration = BoxDecoration(
-        image: DecorationImage(
-          image: AssetImage(assetPath),
-          fit: BoxFit.cover,
-          onError: (_, __) {},
-        ),
-        border: const Border(
-          bottom: BorderSide(color: Color(0x40FFFFFF), width: 1),
-        ),
-      );
-    } else if (cs.isNotEmpty && cs != '-1') {
-      final parsed = int.tryParse(cs);
-      if (parsed != null && parsed != 0) {
-        final rgb = parsed < 0 ? (0xFFFFFF + parsed + 1) : parsed;
-        final baseColor = Color(0xFF000000 | (rgb & 0xFFFFFF));
-        final hsl = HSLColor.fromColor(baseColor);
-        final lighter = hsl.withLightness((hsl.lightness + 0.25).clamp(0.0, 0.95)).toColor();
-        final lightest = hsl.withLightness((hsl.lightness + 0.45).clamp(0.0, 0.97)).toColor();
-        headerDecoration = BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [lightest, lighter, baseColor],
-          ),
-          border: const Border(
-            bottom: BorderSide(color: Color(0x40FFFFFF), width: 1),
-          ),
-        );
-      } else {
-        headerDecoration = _defaultHeaderDecoration();
-      }
-    } else {
-      headerDecoration = _defaultHeaderDecoration();
-    }
-
-    // Build an optional bottom-edge gradient that fades the scene into the
-    // window gradient below (mimics WLM 2009's scene blending).
+    // Fade-to-background overlay at bottom
     BoxDecoration? sceneFadeOverlay;
-    if (scene.isNotEmpty) {
-      final fadeColor = _mainThemeTopColor(selfColorScheme);
-      sceneFadeOverlay = BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            fadeColor.withOpacity(0.0),
-            fadeColor.withOpacity(0.0),
-            fadeColor.withOpacity(0.45),
-          ],
-          stops: const [0.0, 0.60, 1.0],
-        ),
-      );
-    }
+    final fadeColor = _mainThemeTopColor(selfColorScheme);
+    sceneFadeOverlay = BoxDecoration(
+      gradient: LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          fadeColor.withOpacity(0.0),
+          fadeColor.withOpacity(0.0),
+          fadeColor.withOpacity(selfScene.isNotEmpty ? 0.50 : 0.25),
+        ],
+        stops: const [0.0, 0.55, 1.0],
+      ),
+    );
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
-      decoration: headerDecoration,
+      decoration: sceneDecor,
       foregroundDecoration: sceneFadeOverlay,
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // Avatar (tap → status picker) with status-coloured glow
-        GestureDetector(
-          onTap: _showStatusPicker,
-          child: Container(
-            width: 64,
-            height: 64,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(8),
-              boxShadow: [
-                BoxShadow(
-                  color: frameColor.withOpacity(0.55),
-                  blurRadius: 10,
-                  spreadRadius: 1,
+      child: Column(
+        children: [
+          // ── Profile card (frosted glass) ──
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 10, 10, 0),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: BackdropFilter(
+                filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(12, 12, 14, 12),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        Colors.white.withOpacity(0.50),
+                        Colors.white.withOpacity(0.35),
+                        Colors.white.withOpacity(0.45),
+                      ],
+                      stops: const [0.0, 0.5, 1.0],
+                    ),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: Colors.white.withOpacity(0.60),
+                      width: 1.2,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF1A4978).withOpacity(0.12),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      // Avatar (tap → status picker) with status-coloured glow
+                      GestureDetector(
+                        onTap: _showStatusPicker,
+                        child: Container(
+                          width: 68,
+                          height: 68,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(8),
+                            boxShadow: [
+                              BoxShadow(
+                                color: frameColor.withOpacity(0.50),
+                                blurRadius: 12,
+                                spreadRadius: 1,
+                              ),
+                            ],
+                          ),
+                          child: Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              Positioned(
+                                top: 6,
+                                left: 6,
+                                right: 6,
+                                bottom: 6,
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(3),
+                                  child: _selfAvatarImg(avatarPath),
+                                ),
+                              ),
+                              Positioned.fill(
+                                child: ColorFiltered(
+                                  colorFilter: ColorFilter.mode(
+                                    frameColor.withValues(alpha: 0.35),
+                                    BlendMode.srcATop,
+                                  ),
+                                  child: Image.asset(
+                                    _assetAvatarFrame,
+                                    fit: BoxFit.fill,
+                                  ),
+                                ),
+                              ),
+                              Positioned(
+                                right: 0,
+                                bottom: 0,
+                                child: _img(
+                                  _statusAsset(selfStatus),
+                                  w: 16,
+                                  h: 16,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      // Right side: name + PSM (no bordered boxes — clean text)
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            // ── Name row (tap to open status picker) ──
+                            GestureDetector(
+                              onTap: _showStatusPicker,
+                              child: Row(
+                                key: _nameDropdownKey,
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      displayName,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w700,
+                                        color: Color(0xFF1A3650),
+                                        shadows: [
+                                          Shadow(
+                                            color: Color(0x60FFFFFF),
+                                            blurRadius: 4,
+                                          ),
+                                        ],
+                                        fontFamilyFallback: [
+                                          'Segoe UI',
+                                          'Tahoma',
+                                          'Arial',
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Icon(
+                                    Icons.keyboard_arrow_down_rounded,
+                                    size: 20,
+                                    color: const Color(
+                                      0xFF4A7090,
+                                    ).withOpacity(0.7),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            // ── PSM (tap to edit) ──
+                            GestureDetector(
+                              onTap: _startPsmEdit,
+                              child: _editingPsm
+                                  ? SizedBox(
+                                      height: 24,
+                                      child: Row(
+                                        children: [
+                                          Expanded(
+                                            child: TextField(
+                                              controller: _psmCtrl,
+                                              autofocus: true,
+                                              onSubmitted: (_) => _commitPsm(),
+                                              style: const TextStyle(
+                                                fontSize: 13,
+                                                color: Color(0xFF1F3B57),
+                                                fontFamilyFallback: [
+                                                  'Segoe UI',
+                                                  'Tahoma',
+                                                ],
+                                              ),
+                                              decoration: InputDecoration(
+                                                border: InputBorder.none,
+                                                isDense: true,
+                                                contentPadding: EdgeInsets.zero,
+                                                hintText:
+                                                    l10n.quickSharePlaceholder,
+                                                hintStyle: const TextStyle(
+                                                  color: Color(0xFF8AA2BD),
+                                                  fontSize: 13,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                          GestureDetector(
+                                            onTap: _commitPsm,
+                                            child: const Icon(
+                                              Icons.check,
+                                              size: 16,
+                                              color: Color(0xFF2B6A9E),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    )
+                                  : Text(
+                                      psm.isNotEmpty
+                                          ? psm
+                                          : l10n.quickSharePlaceholder,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: psm.isNotEmpty
+                                            ? const Color(0xFF2A4A66)
+                                            : const Color(0xFF8AA2BD),
+                                        shadows: const [
+                                          Shadow(
+                                            color: Color(0x40FFFFFF),
+                                            blurRadius: 3,
+                                          ),
+                                        ],
+                                        fontFamilyFallback: const [
+                                          'Segoe UI',
+                                          'Tahoma',
+                                          'Arial',
+                                        ],
+                                      ),
+                                    ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          // ── Search + Add Contact (inside the scene) ──
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+            child: Row(
+              children: [
+                Expanded(child: _searchBar()),
+                const SizedBox(width: 6),
+                GestureDetector(
+                  onTap: _showAddContactDialog,
+                  child: SizedBox(
+                    width: 34,
+                    height: 34,
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        Center(
+                          child: Image.asset(
+                            _assetBuddyGreen,
+                            width: 30,
+                            height: 30,
+                            filterQuality: FilterQuality.medium,
+                          ),
+                        ),
+                        Positioned(
+                          right: -1,
+                          bottom: 0,
+                          child: Image.asset(
+                            _assetAddContact,
+                            width: 14,
+                            height: 14,
+                            filterQuality: FilterQuality.medium,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ],
             ),
-            child: Stack(alignment: Alignment.center, children: [
-              // Photo — inset ~10% to sit inside the aero frame center
-              Positioned(
-                top: 6, left: 6, right: 6, bottom: 6,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(3),
-                  child: _selfAvatarImg(avatarPath),
-                ),
-              ),
-              // Aero glass frame — light tint preserving glass highlights
-              Positioned.fill(
-                child: ColorFiltered(
-                  colorFilter: ColorFilter.mode(
-                    frameColor.withValues(alpha: 0.45),
-                    BlendMode.srcATop,
-                  ),
-                  child: Image.asset(_assetAvatarFrame, fit: BoxFit.fill),
-                ),
-              ),
-              // Status glow edge
-              Positioned.fill(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(
-                      color: frameColor.withValues(alpha: 0.7),
-                      width: 1.5,
-                    ),
-                  ),
-                ),
-              ),
-              // Status icon overlay bottom-right
-              Positioned(
-                right: 0,
-                bottom: 0,
-                child: _img(_statusAsset(selfStatus), w: 16, h: 16),
-              ),
-            ]),
           ),
-        ),
-        const SizedBox(width: 10),
-        // Right side: name dropdown + PSM
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // ── Name / status dropdown ──
-              GestureDetector(
-                onTap: _showStatusPicker,
-                child: Container(
-                  key: _nameDropdownKey,
-                  height: 32,
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.55),
-                    border: Border.all(
-                        color: const Color(0xFF77A8C8).withOpacity(0.7)),
-                    borderRadius: BorderRadius.circular(3),
-                  ),
-                  child: Row(children: [
-                    Expanded(
-                      child: Text(displayName,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                              color: Color(0xFF243E57),
-                              fontFamilyFallback: [
-                                'Segoe UI',
-                                'Tahoma',
-                                'Arial'
-                              ])),
-                    ),
-                    _img(_assetArrow, w: 11, h: 10),
-                  ]),
-                ),
-              ),
-              const SizedBox(height: 5),
-              // ── PSM (tap to edit) ──
-              GestureDetector(
-                onTap: _startPsmEdit,
-                child: Container(
-                  height: 28,
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.40),
-                    border: Border.all(
-                        color: const Color(0xFF92BCD5).withOpacity(0.6)),
-                    borderRadius: BorderRadius.circular(3),
-                  ),
-                  child: _editingPsm
-                      ? Row(children: [
-                          Expanded(
-                            child: TextField(
-                              controller: _psmCtrl,
-                              autofocus: true,
-                              onSubmitted: (_) => _commitPsm(),
-                              style: const TextStyle(
-                                  fontSize: 13,
-                                  color: Color(0xFF1F3B57),
-                                  fontFamilyFallback: [
-                                    'Segoe UI',
-                                    'Tahoma'
-                                  ]),
-                              decoration: InputDecoration(
-                                border: InputBorder.none,
-                                isDense: true,
-                                contentPadding: EdgeInsets.zero,
-                                hintText: l10n.quickSharePlaceholder,
-                                hintStyle: const TextStyle(
-                                    color: Color(0xFF8AA2BD), fontSize: 13),
-                              ),
-                            ),
-                          ),
-                          GestureDetector(
-                              onTap: _commitPsm,
-                              child: const Icon(Icons.check,
-                                  size: 16, color: Color(0xFF2B6A9E))),
-                        ])
-                      : Align(
-                          alignment: Alignment.centerLeft,
-                          child: Text(
-                            psm.isNotEmpty
-                                ? psm
-                              : l10n.quickSharePlaceholder,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                                fontSize: 13,
-                                color: psm.isNotEmpty
-                                    ? const Color(0xFF1F3B57)
-                                    : const Color(0xFF8AA2BD),
-                                fontFamilyFallback: const [
-                                  'Segoe UI',
-                                  'Tahoma',
-                                  'Arial'
-                                ]),
-                          ),
-                        ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ]),
+        ],
+      ),
     );
   }
 
@@ -802,64 +980,76 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
   // ═════════════════════════════════════════════════════════════════════════
   Widget _searchBar() {
     final l10n = AppLocalizations.of(context)!;
-    return Container(
-      margin: const EdgeInsets.fromLTRB(6, 6, 6, 4),
-      height: 36,
-      padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Color(0xFFE3EFF7), Color(0xFFCFDEEB)],
-        ),
-        border: Border.all(color: const Color(0xFF8EB5D1)),
-        borderRadius: BorderRadius.circular(3),
-      ),
-      child: Row(children: [
-        Expanded(
-          child: TextField(
-            controller: _searchCtrl,
-            onChanged: (v) => setState(() => _searchQuery = v),
-            style: const TextStyle(
-                fontSize: 14,
-                color: Color(0xFF1F3B57),
-                fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial']),
-            decoration: InputDecoration(
-              border: InputBorder.none,
-              isDense: true,
-              contentPadding: const EdgeInsets.symmetric(vertical: 8),
-                hintText: l10n.searchContactsWeb,
-              hintStyle:
-                  const TextStyle(color: Color(0xFF8AA2BD), fontSize: 14),
-              suffixIcon: _searchQuery.isNotEmpty
-                  ? GestureDetector(
-                      onTap: () {
-                        _searchCtrl.clear();
-                        setState(() => _searchQuery = '');
-                      },
-                      child: const Icon(Icons.close,
-                          size: 16, color: Color(0xFF7A95B0)))
-                  : null,
-            ),
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(18),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+        child: Container(
+          height: 36,
+          padding: const EdgeInsets.fromLTRB(10, 0, 8, 0),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.45),
+            border: Border.all(color: Colors.white.withOpacity(0.55)),
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                Icons.search,
+                size: 16,
+                color: const Color(0xFF5A8AAC).withOpacity(0.7),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: TextField(
+                  controller: _searchCtrl,
+                  onChanged: (v) => setState(() => _searchQuery = v),
+                  style: const TextStyle(
+                    fontSize: 14,
+                    color: Color(0xFF1F3B57),
+                    fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
+                  ),
+                  decoration: InputDecoration(
+                    border: InputBorder.none,
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 8),
+                    hintText: l10n.searchContactsWeb,
+                    hintStyle: const TextStyle(
+                      color: Color(0xFF8AA2BD),
+                      fontSize: 14,
+                    ),
+                    suffixIcon: _searchQuery.isNotEmpty
+                        ? GestureDetector(
+                            onTap: () {
+                              _searchCtrl.clear();
+                              setState(() => _searchQuery = '');
+                            },
+                            child: const Icon(
+                              Icons.close,
+                              size: 16,
+                              color: Color(0xFF7A95B0),
+                            ),
+                          )
+                        : null,
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
-      ]),
+      ),
     );
   }
-
-  // ═════════════════════════════════════════════════════════════════════════
-  //  EXPANDABLE GROUP
-  // ═════════════════════════════════════════════════════════════════════════
 
   void _showAddContactDialog() {
     final emailCtrl = TextEditingController();
     showDialog(
       context: context,
       builder: (ctx) => Dialog(
-        backgroundColor: const Color(0xFFF0F4F8),
+        backgroundColor: const Color(0xFFF4F8FB),
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(4),
-          side: const BorderSide(color: Color(0xFF7A9BB5)),
+          borderRadius: BorderRadius.circular(14),
+          side: BorderSide(color: Colors.white.withOpacity(0.6)),
         ),
         child: SizedBox(
           width: 320,
@@ -869,14 +1059,23 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
               // Blue gradient header
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 10,
+                ),
                 decoration: const BoxDecoration(
                   gradient: LinearGradient(
-                    colors: [Color(0xFF2B6DAD), Color(0xFF4A9BD9)],
+                    colors: [
+                      Color(0xFF1A4978),
+                      Color(0xFF3A8CC4),
+                      Color(0xFF5CAEE0),
+                      Color(0xFF2F7CB5),
+                    ],
+                    stops: [0.0, 0.40, 0.55, 1.0],
                   ),
                   borderRadius: BorderRadius.only(
-                    topLeft: Radius.circular(4),
-                    topRight: Radius.circular(4),
+                    topLeft: Radius.circular(14),
+                    topRight: Radius.circular(14),
                   ),
                 ),
                 child: const Text(
@@ -925,24 +1124,33 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
                       decoration: InputDecoration(
                         hintText: 'example@hotmail.com',
                         hintStyle: const TextStyle(
-                          fontSize: 12, color: Color(0xFF9BB0C4),
+                          fontSize: 12,
+                          color: Color(0xFF9BB0C4),
                         ),
                         filled: true,
                         fillColor: Colors.white,
                         contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 8),
+                          horizontal: 8,
+                          vertical: 8,
+                        ),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(2),
-                          borderSide: const BorderSide(color: Color(0xFF8AAFC8)),
+                          borderSide: const BorderSide(
+                            color: Color(0xFF8AAFC8),
+                          ),
                         ),
                         enabledBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(2),
-                          borderSide: const BorderSide(color: Color(0xFF8AAFC8)),
+                          borderSide: const BorderSide(
+                            color: Color(0xFF8AAFC8),
+                          ),
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(2),
                           borderSide: const BorderSide(
-                              color: Color(0xFF3678B0), width: 1.5),
+                            color: Color(0xFF3678B0),
+                            width: 1.5,
+                          ),
                         ),
                       ),
                     ),
@@ -954,7 +1162,10 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
               const Divider(height: 1, color: Color(0xFFBFD3E2)),
               // Action buttons
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 10,
+                ),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
@@ -963,7 +1174,9 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
                       onTap: () => Navigator.pop(ctx),
                       child: Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 6),
+                          horizontal: 16,
+                          vertical: 6,
+                        ),
                         decoration: BoxDecoration(
                           gradient: const LinearGradient(
                             begin: Alignment.topCenter,
@@ -973,12 +1186,14 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
                           border: Border.all(color: const Color(0xFFADBDCD)),
                           borderRadius: BorderRadius.circular(3),
                         ),
-                        child: const Text('Cancel',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Color(0xFF1B2A38),
-                              fontFamilyFallback: ['Segoe UI', 'Tahoma'],
-                            )),
+                        child: const Text(
+                          'Cancel',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFF1B2A38),
+                            fontFamilyFallback: ['Segoe UI', 'Tahoma'],
+                          ),
+                        ),
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -996,7 +1211,9 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
                       },
                       child: Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 20, vertical: 6),
+                          horizontal: 20,
+                          vertical: 6,
+                        ),
                         decoration: BoxDecoration(
                           gradient: const LinearGradient(
                             begin: Alignment.topCenter,
@@ -1006,13 +1223,15 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
                           border: Border.all(color: const Color(0xFF1E4F82)),
                           borderRadius: BorderRadius.circular(3),
                         ),
-                        child: const Text('Add Contact',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.white,
-                              fontWeight: FontWeight.w600,
-                              fontFamilyFallback: ['Segoe UI', 'Tahoma'],
-                            )),
+                        child: const Text(
+                          'Add Contact',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.white,
+                            fontWeight: FontWeight.w600,
+                            fontFamilyFallback: ['Segoe UI', 'Tahoma'],
+                          ),
+                        ),
                       ),
                     ),
                   ],
@@ -1025,37 +1244,66 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
     );
   }
 
-  Widget _group(String title, int count, bool expanded, VoidCallback toggle,
-      List<Widget> children) {
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      GestureDetector(
-        onTap: toggle,
-        behavior: HitTestBehavior.opaque,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(2, 8, 2, 4),
-          child: Row(children: [
-            // WLM 2009 triangle arrow — right for collapsed, rotated 90° for expanded
-            Transform.rotate(
-              angle: expanded ? 1.5708 : 0, // pi/2 radians = 90°
-              child: Image.asset(
-                _assetGroupArrow,
-                width: 9,
-                height: 11,
-                fit: BoxFit.contain,
+  Widget _group(
+    String title,
+    int count,
+    bool expanded,
+    VoidCallback toggle,
+    List<Widget> children,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        GestureDetector(
+          onTap: toggle,
+          behavior: HitTestBehavior.opaque,
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(4, 10, 8, 8),
+            decoration: BoxDecoration(
+              border: Border(
+                bottom: BorderSide(
+                  color: const Color(0xFF90B8D4).withOpacity(0.20),
+                  width: 1,
+                ),
               ),
             ),
-            const SizedBox(width: 4),
-            Text('$title ($count)',
-                style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF2B5A92),
-                    fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'])),
-          ]),
+            child: Row(
+              children: [
+                // Modern chevron instead of red triangle
+                Icon(
+                  expanded
+                      ? Icons.keyboard_arrow_down_rounded
+                      : Icons.chevron_right_rounded,
+                  size: 18,
+                  color: const Color(0xFF5A8AAC),
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    '${title.toUpperCase()}  $count',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.8,
+                      color: Color(0xFF4A7A9C),
+                      fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
+                    ),
+                  ),
+                ),
+                Icon(
+                  expanded
+                      ? Icons.expand_less_rounded
+                      : Icons.expand_more_rounded,
+                  size: 18,
+                  color: const Color(0xFF8EB0C8).withOpacity(0.6),
+                ),
+              ],
+            ),
+          ),
         ),
-      ),
-      if (expanded) ...children,
-    ]);
+        if (expanded) ...children,
+      ],
+    );
   }
 
   // ═════════════════════════════════════════════════════════════════════════
@@ -1065,12 +1313,12 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
     final notifier = ref.read(contactsProvider.notifier);
     final isFav = notifier.isFavorite(contact.email);
     final RenderBox box = context.findRenderObject() as RenderBox;
-    final overlay =
-        Overlay.of(context).context.findRenderObject() as RenderBox;
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
     // Show near center of screen for touch friendliness
     final center = box.localToGlobal(
-        Offset(box.size.width / 2, box.size.height / 2),
-        ancestor: overlay);
+      Offset(box.size.width / 2, box.size.height / 2),
+      ancestor: overlay,
+    );
     showMenu<String>(
       context: context,
       position: RelativeRect.fromLTRB(
@@ -1089,90 +1337,103 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
         PopupMenuItem<String>(
           value: 'fav',
           height: 40,
-          child: Row(children: [
-            Container(
-              width: 24,
-              height: 24,
-              decoration: BoxDecoration(
-                color: isFav
-                    ? const Color(0xFFFFF3D0)
-                    : const Color(0xFFE8F0F6),
-                shape: BoxShape.circle,
-                border: Border.all(
+          child: Row(
+            children: [
+              Container(
+                width: 24,
+                height: 24,
+                decoration: BoxDecoration(
+                  color: isFav
+                      ? const Color(0xFFFFF3D0)
+                      : const Color(0xFFE8F0F6),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: isFav
+                        ? const Color(0xFFD4A017)
+                        : const Color(0xFFAAC5DB),
+                  ),
+                ),
+                child: Icon(
+                  isFav ? Icons.star : Icons.star_border,
+                  size: 14,
                   color: isFav
                       ? const Color(0xFFD4A017)
-                      : const Color(0xFFAAC5DB),
+                      : const Color(0xFF6A8FB5),
                 ),
               ),
-              child: Icon(
-                isFav ? Icons.star : Icons.star_border,
-                size: 14,
-                color: isFav
-                    ? const Color(0xFFD4A017)
-                    : const Color(0xFF6A8FB5),
+              const SizedBox(width: 10),
+              Text(
+                isFav ? 'Remove from Favorites' : 'Add to Favorites',
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF1B2A38),
+                  fontFamilyFallback: ['Segoe UI', 'Tahoma'],
+                ),
               ),
-            ),
-            const SizedBox(width: 10),
-            Text(
-              isFav ? 'Remove from Favorites' : 'Add to Favorites',
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-                color: Color(0xFF1B2A38),
-                fontFamilyFallback: ['Segoe UI', 'Tahoma'],
-              ),
-            ),
-          ]),
+            ],
+          ),
         ),
         const PopupMenuDivider(height: 1),
         PopupMenuItem<String>(
           value: 'remove',
           height: 40,
-          child: Row(children: [
-            Container(
-              width: 24,
-              height: 24,
-              decoration: BoxDecoration(
-                color: const Color(0xFFFDE8E8),
-                shape: BoxShape.circle,
-                border: Border.all(color: const Color(0xFFD04040)),
+          child: Row(
+            children: [
+              Container(
+                width: 24,
+                height: 24,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFDE8E8),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: const Color(0xFFD04040)),
+                ),
+                child: const Icon(
+                  Icons.person_remove,
+                  size: 13,
+                  color: Color(0xFFD04040),
+                ),
               ),
-              child: const Icon(Icons.person_remove,
-                  size: 13, color: Color(0xFFD04040)),
-            ),
-            const SizedBox(width: 10),
-            const Text(
-              'Remove Contact',
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-                color: Color(0xFF1B2A38),
-                fontFamilyFallback: ['Segoe UI', 'Tahoma'],
+              const SizedBox(width: 10),
+              const Text(
+                'Remove Contact',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF1B2A38),
+                  fontFamilyFallback: ['Segoe UI', 'Tahoma'],
+                ),
               ),
-            ),
-          ]),
+            ],
+          ),
         ),
         const PopupMenuDivider(height: 1),
         PopupMenuItem<String>(
           value: 'profile',
           height: 36,
-          child: Row(children: [
-            const SizedBox(width: 4),
-            const Icon(Icons.person_outline, size: 16, color: Color(0xFF6A8FB5)),
-            const SizedBox(width: 10),
-            Text(
-              stripWlmColorTags(contact.displayName),
-              style: const TextStyle(
-                fontSize: 12,
-                color: Color(0xFF5A7A94),
-                fontStyle: FontStyle.italic,
-                fontFamilyFallback: ['Segoe UI', 'Tahoma'],
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ]),
           enabled: false,
+          child: Row(
+            children: [
+              const SizedBox(width: 4),
+              const Icon(
+                Icons.person_outline,
+                size: 16,
+                color: Color(0xFF6A8FB5),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                stripWlmColorTags(contact.displayName),
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: Color(0xFF5A7A94),
+                  fontStyle: FontStyle.italic,
+                  fontFamilyFallback: ['Segoe UI', 'Tahoma'],
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
         ),
       ],
     ).then((value) {
@@ -1188,10 +1449,10 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFFF0F4F8),
+        backgroundColor: const Color(0xFFF4F8FB),
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(4),
-          side: const BorderSide(color: Color(0xFF7A9BB5)),
+          borderRadius: BorderRadius.circular(14),
+          side: BorderSide(color: Colors.white.withOpacity(0.6)),
         ),
         title: const Text(
           'Remove Contact',
@@ -1223,7 +1484,9 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
                 SnackBar(content: Text('${contact.email} removed.')),
               );
             },
-            style: TextButton.styleFrom(foregroundColor: const Color(0xFFD04040)),
+            style: TextButton.styleFrom(
+              foregroundColor: const Color(0xFFD04040),
+            ),
             child: const Text('Remove'),
           ),
         ],
@@ -1235,150 +1498,218 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
   //  CONTACT TILE
   // ═════════════════════════════════════════════════════════════════════════
   Widget _tile(Contact contact, {required bool online}) {
-    final segments = parseWlmColorTags(contact.displayName,
-        defaultColor:
-            online ? const Color(0xFF0A3A7D) : const Color(0xFF707070));
+    final segments = parseWlmColorTags(
+      contact.displayName,
+      defaultColor: online ? const Color(0xFF0A3A7D) : const Color(0xFF707070),
+    );
 
     return InkWell(
       onTap: () {
         ref.read(activeChatEmailProvider.notifier).setActive(contact.email);
-        ref
-            .read(contactsProvider.notifier)
-            .resetUnreadForEmail(contact.email);
+        ref.read(contactsProvider.notifier).resetUnreadForEmail(contact.email);
         Navigator.of(context)
-            .push(MaterialPageRoute(
-                builder: (_) => ChatWindowScreen(contact: contact)))
+            .push(
+              MaterialPageRoute(
+                builder: (_) => ChatWindowScreen(contact: contact),
+              ),
+            )
             .then((_) {
-          ref
-              .read(activeChatEmailProvider.notifier)
-              .clearActive(contact.email);
-        });
+              ref
+                  .read(activeChatEmailProvider.notifier)
+                  .clearActive(contact.email);
+            });
       },
       onLongPress: () => _showContactMenu(contact),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 2),
-        child: Row(children: [
-          // ── Avatar ──
-          SizedBox(
-            width: 38,
-            height: 38,
-            child: Stack(clipBehavior: Clip.none, children: [
-              // Photo — inset ~15.5% to sit inside the aero frame center
-              Positioned(
-                top: 6, left: 6, right: 6, bottom: 6,
-                child: Opacity(
-                  opacity: online ? 1 : 0.45,
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(2),
-                    child: _contactAvatarImg(contact, online: online),
-                  ),
-                ),
-              ),
-              // Aero glass frame, recolored by status via ColorFilter
-              Positioned.fill(
-                child: ColorFiltered(
-                  colorFilter: ColorFilter.mode(
-                    online
-                        ? _statusAccent(contact.status).withValues(alpha: 0.85)
-                        : const Color(0xFF9EACB8).withValues(alpha: 0.45),
-                    BlendMode.srcATop,
-                  ),
-                  child: Opacity(
-                    opacity: online ? 1 : 0.7,
-                    child: Image.asset(_assetAvatarFrame, fit: BoxFit.fill),
-                  ),
-                ),
-              ),
-              if (online)
-                Positioned(
-                  right: -3,
-                  bottom: -3,
-                  child: _img(_statusAsset(contact.status),
-                      w: 14, h: 14, fit: BoxFit.fill),
-                ),
-            ]),
+      highlightColor: const Color(0xFFD0E8F5),
+      splashColor: const Color(0x30538DBF),
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 4),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Colors.white.withOpacity(0.18),
+              Colors.white.withOpacity(0.06),
+            ],
           ),
-          const SizedBox(width: 8),
-          // ── Name + subtitle ──
-          Expanded(
-            child:
-                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text.rich(
-                TextSpan(
-                  children: segments
-                      .map((s) => TextSpan(
-                          text: s.text,
-                          style: TextStyle(
-                              color:
-                                  online ? s.color : s.color.withOpacity(0.6),
-                              fontSize: 15,
-                              fontFamilyFallback: const [
-                                'Segoe UI',
-                                'Tahoma',
-                                'Arial'
-                              ])))
-                      .toList(),
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.white.withOpacity(0.15), width: 0.5),
+        ),
+        child: Row(
+          children: [
+            // ── Avatar ──
+            SizedBox(
+              width: 42,
+              height: 42,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  // Photo — inset 9.35% to match frame transparent center
+                  Positioned(
+                    top: 4,
+                    left: 4,
+                    right: 4,
+                    bottom: 4,
+                    child: Opacity(
+                      opacity: online ? 1 : 0.45,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(2),
+                        child: _contactAvatarImg(contact, online: online),
+                      ),
+                    ),
+                  ),
+                  // Aero glass frame, recolored by status via ColorFilter
+                  Positioned.fill(
+                    child: ColorFiltered(
+                      colorFilter: ColorFilter.mode(
+                        online
+                            ? _statusAccent(
+                                contact.status,
+                              ).withValues(alpha: 0.35)
+                            : const Color(0xFF9EACB8).withValues(alpha: 0.35),
+                        BlendMode.srcATop,
+                      ),
+                      child: Opacity(
+                        opacity: online ? 1 : 0.7,
+                        child: Image.asset(_assetAvatarFrame, fit: BoxFit.fill),
+                      ),
+                    ),
+                  ),
+                  if (online)
+                    Positioned(
+                      right: -3,
+                      bottom: -3,
+                      child: _img(
+                        _statusAsset(contact.status),
+                        w: 14,
+                        h: 14,
+                        fit: BoxFit.fill,
+                      ),
+                    ),
+                ],
               ),
-              if ((contact.nowPlaying ?? '').isNotEmpty)
-                Text('♫ ${contact.nowPlaying!}',
+            ),
+            const SizedBox(width: 8),
+            // ── Name + subtitle ──
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text.rich(
+                    TextSpan(
+                      children: segments
+                          .map(
+                            (s) => TextSpan(
+                              text: s.text,
+                              style: TextStyle(
+                                color: online
+                                    ? s.color
+                                    : s.color.withOpacity(0.6),
+                                fontSize: 15,
+                                fontFamilyFallback: const [
+                                  'Segoe UI',
+                                  'Tahoma',
+                                  'Arial',
+                                ],
+                              ),
+                            ),
+                          )
+                          .toList(),
+                    ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                  ),
+                  if ((contact.nowPlaying ?? '').isNotEmpty)
+                    Text(
+                      '♫ ${contact.nowPlaying!}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
                         fontSize: 12,
                         color: Color(0xFF0A5EC2),
-                        fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial']))
-              else if ((contact.personalMessage ?? '').isNotEmpty)
-                Text(contact.personalMessage!,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                        fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
+                      ),
+                    )
+                  else if ((contact.personalMessage ?? '').isNotEmpty)
+                    Text(
+                      contact.personalMessage!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
                         fontSize: 12,
                         color: Color(0xFF5A7A94),
-                        fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'])),
-            ]),
-          ),
-          // ── Unread badge ──
-          Consumer(
-            builder: (context, trailingRef, _) {
-              final unread = trailingRef.watch(contactsProvider.select((cl) {
-                for (final c in cl) {
-                  if (c.email.toLowerCase() == contact.email.toLowerCase()) {
-                    return c.unreadCount;
-                  }
-                }
-                return 0;
-              }));
-              if (unread <= 0) return const SizedBox.shrink();
-              return Container(
-                width: 22,
-                height: 22,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFE11A1A),
-                  shape: BoxShape.circle,
-                  border:
-                      Border.all(color: const Color(0xFFFFF1B3), width: 1.2),
-                  boxShadow: const [
-                    BoxShadow(
-                        color: Color(0x55A50000),
-                        blurRadius: 5,
-                        offset: Offset(0, 1))
-                  ],
-                ),
-                child: Text('$unread',
+                        fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            // ── Unread badge ──
+            Consumer(
+              builder: (context, trailingRef, _) {
+                final unread = trailingRef.watch(
+                  contactsProvider.select((cl) {
+                    for (final c in cl) {
+                      if (c.email.toLowerCase() ==
+                          contact.email.toLowerCase()) {
+                        return c.unreadCount;
+                      }
+                    }
+                    return 0;
+                  }),
+                );
+                if (unread <= 0) return const SizedBox.shrink();
+                return Container(
+                  width: 22,
+                  height: 22,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Color(0xFF6DC2F5),
+                        Color(0xFF3A9BD8),
+                        Color(0xFF2878B5),
+                      ],
+                      stops: [0.0, 0.5, 1.0],
+                    ),
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: const Color(0xCCFFFFFF),
+                      width: 1.2,
+                    ),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x442A6A9E),
+                        blurRadius: 6,
+                        offset: Offset(0, 1),
+                      ),
+                      BoxShadow(
+                        color: Color(0x22FFFFFF),
+                        blurRadius: 2,
+                        spreadRadius: -1,
+                        offset: Offset(0, -1),
+                      ),
+                    ],
+                  ),
+                  child: Text(
+                    '$unread',
                     textAlign: TextAlign.center,
                     style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                        fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'])),
-              );
-            },
-          ),
-        ]),
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1408,8 +1739,7 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
       );
       final picture = recorder.endRecording();
       final rendered = await picture.toImage(96, 96);
-      final pngData =
-          await rendered.toByteData(format: ui.ImageByteFormat.png);
+      final pngData = await rendered.toByteData(format: ui.ImageByteFormat.png);
       if (pngData == null) return null;
       return pngData.buffer.asUint8List();
     } catch (_) {
@@ -1429,48 +1759,56 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
   }
 
   void _showDisplayPicturePicker() {
-    // Default WLM 2009 usertiles extracted from usertiles.mct.
     final defaultTiles = <String>[
-      'basketball.png', 'bonsai.png', 'chef.png', 'chess.png',
-      'daisy.png', 'doctor.png', 'dog.png', 'electric_guitar.png',
-      'executive.png', 'fish.png', 'flare.png', 'gerber_daisy.png',
-      'golf.png', 'guest.png', 'guitar.png', 'kitten.png',
-      'leaf.png', 'morty.png', 'music.png', 'robot.png',
-      'seastar.png', 'shopping.png', 'sports.png', 'surf.png',
-      'tennis.png',
-    ];
-
-    // WLM 2009 "Dynamic Display Pictures" (animated GIFs).
-    final dynamicTiles = <String>[
-      'fall.gif', 'spring.gif', 'summer.gif', 'winter.gif', 'soccer.gif',
+      'bonsai.png',
+      'chef.png',
+      'chess.png',
+      'doctor.png',
+      'executive.png',
+      'fish.png',
+      'memory_keeper.png',
+      'robot.png',
+      'sports.png',
+      'tenis.png',
+      'traveler.png',
+      'winter.png',
     ];
 
     showDialog(
       context: context,
       builder: (ctx) {
         return Dialog(
-          backgroundColor: const Color(0xFFF0F4F8),
+          backgroundColor: const Color(0xFFF4F8FB),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(4),
-            side: const BorderSide(color: Color(0xFF7A9BB5)),
+            borderRadius: BorderRadius.circular(14),
+            side: BorderSide(color: Colors.white.withOpacity(0.6)),
           ),
           child: SizedBox(
             width: 420,
-            height: 560,
+            height: 440,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 // Title bar
                 Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
                   decoration: const BoxDecoration(
                     gradient: LinearGradient(
-                      colors: [Color(0xFF2B6DAD), Color(0xFF4A9BD9)],
+                      colors: [
+                        Color(0xFF1A4978),
+                        Color(0xFF3A8CC4),
+                        Color(0xFF5CAEE0),
+                        Color(0xFF2F7CB5),
+                      ],
+                      stops: [0.0, 0.40, 0.55, 1.0],
                     ),
                     borderRadius: BorderRadius.only(
-                      topLeft: Radius.circular(4),
-                      topRight: Radius.circular(4),
+                      topLeft: Radius.circular(14),
+                      topRight: Radius.circular(14),
                     ),
                   ),
                   child: const Text(
@@ -1485,29 +1823,45 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
                 ),
                 const SizedBox(height: 10),
                 // Current avatar preview
-                Consumer(builder: (_, cRef, __) {
-                  final avatarPath = cRef.watch(profileAvatarProvider);
-                  return SizedBox(
-                    width: 80,
-                    height: 80,
-                    child: Stack(
-                      children: [
-                        Positioned(
-                          top: 12, left: 12, right: 12, bottom: 12,
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(3),
-                            child: avatarPath != null && File(avatarPath).existsSync()
-                                ? Image.file(File(avatarPath), fit: BoxFit.cover)
-                                : Image.asset(_assetAvatarUser, fit: BoxFit.cover),
+                Consumer(
+                  builder: (_, cRef, _) {
+                    final avatarPath = cRef.watch(profileAvatarProvider);
+                    return SizedBox(
+                      width: 80,
+                      height: 80,
+                      child: Stack(
+                        children: [
+                          Positioned(
+                            top: 7,
+                            left: 7,
+                            right: 7,
+                            bottom: 7,
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(3),
+                              child:
+                                  avatarPath != null &&
+                                      File(avatarPath).existsSync()
+                                  ? Image.file(
+                                      File(avatarPath),
+                                      fit: BoxFit.cover,
+                                    )
+                                  : Image.asset(
+                                      _assetAvatarUser,
+                                      fit: BoxFit.cover,
+                                    ),
+                            ),
                           ),
-                        ),
-                        Positioned.fill(
-                          child: Image.asset(_assetAvatarFrame, fit: BoxFit.fill),
-                        ),
-                      ],
-                    ),
-                  );
-                }),
+                          Positioned.fill(
+                            child: Image.asset(
+                              _assetAvatarFrame,
+                              fit: BoxFit.fill,
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
                 const SizedBox(height: 8),
                 const Padding(
                   padding: EdgeInsets.symmetric(horizontal: 12),
@@ -1539,27 +1893,39 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
                             physics: const NeverScrollableScrollPhysics(),
                             gridDelegate:
                                 const SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: 5,
-                              mainAxisSpacing: 4,
-                              crossAxisSpacing: 4,
-                            ),
+                                  crossAxisCount: 4,
+                                  mainAxisSpacing: 6,
+                                  crossAxisSpacing: 6,
+                                ),
                             itemCount: defaultTiles.length,
                             itemBuilder: (context, index) {
                               final tile = defaultTiles[index];
                               return GestureDetector(
                                 onTap: () async {
                                   Navigator.pop(ctx);
-                                  final data = await DefaultAssetBundle.of(context)
-                                      .load('assets/images/usertiles/$tile');
+                                  final data = await DefaultAssetBundle.of(
+                                    context,
+                                  ).load('assets/images/usertiles/$tile');
+                                  final rawBytes = data.buffer.asUint8List();
+                                  // Resize to 96×96 PNG for WLM 2009 compatibility.
+                                  final resized = await _resizeImageTo96x96(
+                                    rawBytes,
+                                  );
                                   final client = ref.read(msnpClientProvider);
                                   final appDir =
                                       await getApplicationDocumentsDirectory();
-                                  final ts = DateTime.now().millisecondsSinceEpoch;
-                                  await _cleanupOldAvatars(appDir, client.selfEmail);
+                                  final ts =
+                                      DateTime.now().millisecondsSinceEpoch;
+                                  await _cleanupOldAvatars(
+                                    appDir,
+                                    client.selfEmail,
+                                  );
                                   final destFile = File(
-                                      '${appDir.path}/avatar_${client.selfEmail}_$ts.png');
+                                    '${appDir.path}/avatar_${client.selfEmail}_$ts.png',
+                                  );
                                   await destFile.writeAsBytes(
-                                      data.buffer.asUint8List());
+                                    resized ?? rawBytes,
+                                  );
                                   ref
                                       .read(profileAvatarProvider.notifier)
                                       .setPath(destFile.path);
@@ -1567,75 +1933,16 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
                                 child: Container(
                                   decoration: BoxDecoration(
                                     border: Border.all(
-                                        color: const Color(0xFFD0D0D0)),
+                                      color: const Color(0xFFD0D0D0),
+                                    ),
                                     borderRadius: BorderRadius.circular(2),
                                   ),
                                   child: ClipRRect(
                                     borderRadius: BorderRadius.circular(2),
                                     child: Image.asset(
-                                        'assets/images/usertiles/$tile',
-                                        fit: BoxFit.cover),
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                          const SizedBox(height: 8),
-                          // ── Dynamic Display Pictures (animated GIFs) ──
-                          const Padding(
-                            padding: EdgeInsets.only(bottom: 4),
-                            child: Text(
-                              'Dynamic Display Pictures',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: Color(0xFF2A3E50),
-                                fontFamilyFallback: ['Segoe UI', 'Tahoma'],
-                              ),
-                            ),
-                          ),
-                          GridView.builder(
-                            shrinkWrap: true,
-                            physics: const NeverScrollableScrollPhysics(),
-                            gridDelegate:
-                                const SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: 5,
-                              mainAxisSpacing: 4,
-                              crossAxisSpacing: 4,
-                            ),
-                            itemCount: dynamicTiles.length,
-                            itemBuilder: (context, index) {
-                              final tile = dynamicTiles[index];
-                              return GestureDetector(
-                                onTap: () async {
-                                  Navigator.pop(ctx);
-                                  final data = await DefaultAssetBundle.of(context)
-                                      .load('assets/images/usertiles/$tile');
-                                  final client = ref.read(msnpClientProvider);
-                                  final appDir =
-                                      await getApplicationDocumentsDirectory();
-                                  final ts = DateTime.now().millisecondsSinceEpoch;
-                                  await _cleanupOldAvatars(appDir, client.selfEmail);
-                                  final ext = tile.split('.').last;
-                                  final destFile = File(
-                                      '${appDir.path}/avatar_${client.selfEmail}_$ts.$ext');
-                                  await destFile.writeAsBytes(
-                                      data.buffer.asUint8List());
-                                  ref
-                                      .read(profileAvatarProvider.notifier)
-                                      .setPath(destFile.path);
-                                },
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    border: Border.all(
-                                        color: const Color(0xFFD0D0D0)),
-                                    borderRadius: BorderRadius.circular(2),
-                                  ),
-                                  child: ClipRRect(
-                                    borderRadius: BorderRadius.circular(2),
-                                    child: Image.asset(
-                                        'assets/images/usertiles/$tile',
-                                        fit: BoxFit.cover),
+                                      'assets/images/usertiles/$tile',
+                                      fit: BoxFit.cover,
+                                    ),
                                   ),
                                 ),
                               );
@@ -1662,29 +1969,35 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
                         final path = result.files.single.path;
                         if (path == null) return;
                         final srcBytes = await File(path).readAsBytes();
-                        debugPrint('[DP-Browse] Source: $path  '
-                            '${srcBytes.length} bytes');
+                        debugPrint(
+                          '[DP-Browse] Source: $path  '
+                          '${srcBytes.length} bytes',
+                        );
                         // Resize to 96×96 PNG for WLM 2009 compatibility.
                         // If resize fails, fall back to the original file.
                         final resized = await _resizeImageTo96x96(srcBytes);
-                        debugPrint('[DP-Browse] Resize result: '
-                            '${resized != null ? '${resized.length} bytes' : 'FAILED (using original)'}');
+                        debugPrint(
+                          '[DP-Browse] Resize result: '
+                          '${resized != null ? '${resized.length} bytes' : 'FAILED (using original)'}',
+                        );
                         final client = ref.read(msnpClientProvider);
-                        final appDir =
-                            await getApplicationDocumentsDirectory();
+                        final appDir = await getApplicationDocumentsDirectory();
                         final ts = DateTime.now().millisecondsSinceEpoch;
                         await _cleanupOldAvatars(appDir, client.selfEmail);
                         final ext = path.split('.').last.toLowerCase();
                         final destExt = resized != null ? 'png' : ext;
                         final destFile = File(
-                            '${appDir.path}/avatar_${client.selfEmail}_$ts.$destExt');
+                          '${appDir.path}/avatar_${client.selfEmail}_$ts.$destExt',
+                        );
                         if (resized != null) {
                           await destFile.writeAsBytes(resized);
                         } else {
                           await File(path).copy(destFile.path);
                         }
-                        debugPrint('[DP-Browse] Saved: ${destFile.path}  '
-                            '${await destFile.length()} bytes');
+                        debugPrint(
+                          '[DP-Browse] Saved: ${destFile.path}  '
+                          '${await destFile.length()} bytes',
+                        );
                         ref
                             .read(profileAvatarProvider.notifier)
                             .setPath(destFile.path);
@@ -1760,10 +2073,10 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
         return StatefulBuilder(
           builder: (ctx, setDialogState) {
             return Dialog(
-              backgroundColor: const Color(0xFFF0F4F8),
+              backgroundColor: const Color(0xFFF4F8FB),
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(4),
-                side: const BorderSide(color: Color(0xFF7A9BB5)),
+                borderRadius: BorderRadius.circular(14),
+                side: BorderSide(color: Colors.white.withOpacity(0.6)),
               ),
               child: SizedBox(
                 width: 440,
@@ -1775,14 +2088,22 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
                     Container(
                       width: double.infinity,
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 8),
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
                       decoration: const BoxDecoration(
                         gradient: LinearGradient(
-                          colors: [Color(0xFF2B6DAD), Color(0xFF4A9BD9)],
+                          colors: [
+                            Color(0xFF1A4978),
+                            Color(0xFF3A8CC4),
+                            Color(0xFF5CAEE0),
+                            Color(0xFF2F7CB5),
+                          ],
+                          stops: [0.0, 0.40, 0.55, 1.0],
                         ),
                         borderRadius: BorderRadius.only(
-                          topLeft: Radius.circular(4),
-                          topRight: Radius.circular(4),
+                          topLeft: Radius.circular(14),
+                          topRight: Radius.circular(14),
                         ),
                       ),
                       child: const Text(
@@ -1822,11 +2143,11 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
                             padding: const EdgeInsets.all(6),
                             gridDelegate:
                                 const SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: 4,
-                              mainAxisSpacing: 4,
-                              crossAxisSpacing: 4,
-                              childAspectRatio: 2.0, // 640x320 = 2:1
-                            ),
+                                  crossAxisCount: 4,
+                                  mainAxisSpacing: 4,
+                                  crossAxisSpacing: 4,
+                                  childAspectRatio: 2.0, // 640x320 = 2:1
+                                ),
                             itemCount: scenes.length + 1, // +1 for "Default"
                             itemBuilder: (context, index) {
                               if (index == 0) {
@@ -1834,15 +2155,14 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
                                 final isSelected = selectedScene.isEmpty;
                                 return GestureDetector(
                                   onTap: () {
-                                    setDialogState(
-                                        () => selectedScene = '');
+                                    setDialogState(() => selectedScene = '');
                                   },
                                   child: Container(
                                     decoration: BoxDecoration(
                                       gradient: const LinearGradient(
                                         colors: [
                                           Color(0xFF87CEEB),
-                                          Color(0xFFB0E0B0)
+                                          Color(0xFFB0E0B0),
                                         ],
                                       ),
                                       border: Border.all(
@@ -1853,25 +2173,27 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
                                       ),
                                     ),
                                     alignment: Alignment.center,
-                                    child: const Text('Default',
-                                        style: TextStyle(
-                                          fontSize: 10,
-                                          color: Color(0xFF2A3E50),
-                                          fontFamilyFallback: [
-                                            'Segoe UI',
-                                            'Tahoma'
-                                          ],
-                                        )),
+                                    child: const Text(
+                                      'Default',
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        color: Color(0xFF2A3E50),
+                                        fontFamilyFallback: [
+                                          'Segoe UI',
+                                          'Tahoma',
+                                        ],
+                                      ),
+                                    ),
                                   ),
                                 );
                               }
                               final scene = scenes[index - 1];
-                              final isSelected =
-                                  selectedScene == scene.file;
+                              final isSelected = selectedScene == scene.file;
                               return GestureDetector(
                                 onTap: () {
                                   setDialogState(
-                                      () => selectedScene = scene.file);
+                                    () => selectedScene = scene.file,
+                                  );
                                 },
                                 child: Container(
                                   decoration: BoxDecoration(
@@ -1914,12 +2236,12 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
                         spacing: 6,
                         runSpacing: 6,
                         children: colorPresets.map((preset) {
-                          final isSelected =
-                              preset.value == selectedScheme;
+                          final isSelected = preset.value == selectedScheme;
                           return GestureDetector(
                             onTap: () {
                               setDialogState(
-                                  () => selectedScheme = preset.value);
+                                () => selectedScheme = preset.value,
+                              );
                             },
                             child: Tooltip(
                               message: preset.label,
@@ -1937,8 +2259,11 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
                                   borderRadius: BorderRadius.circular(2),
                                 ),
                                 child: isSelected
-                                    ? const Icon(Icons.check,
-                                        color: Colors.white, size: 16)
+                                    ? const Icon(
+                                        Icons.check,
+                                        color: Colors.white,
+                                        size: 16,
+                                      )
                                     : null,
                               ),
                             ),
@@ -1990,17 +2315,19 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
           gradient: const LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [Color(0xFFF0F4F8), Color(0xFFD8E4EE)],
+            colors: [Color(0xFFF4F8FB), Color(0xFFDAE6F0)],
           ),
-          border: Border.all(color: const Color(0xFF8AA8C0)),
-          borderRadius: BorderRadius.circular(3),
+          border: Border.all(color: const Color(0xFFB0C8D8)),
+          borderRadius: BorderRadius.circular(8),
         ),
-        child: Text(label,
-            style: const TextStyle(
-              fontSize: 12,
-              color: Color(0xFF1A3A50),
-              fontFamilyFallback: ['Segoe UI', 'Tahoma'],
-            )),
+        child: Text(
+          label,
+          style: const TextStyle(
+            fontSize: 12,
+            color: Color(0xFF1A3A50),
+            fontFamilyFallback: ['Segoe UI', 'Tahoma'],
+          ),
+        ),
       ),
     );
   }
@@ -2016,10 +2343,10 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
       context: context,
       builder: (ctx) {
         return Dialog(
-          backgroundColor: const Color(0xFFF0F4F8),
+          backgroundColor: const Color(0xFFF4F8FB),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(4),
-            side: const BorderSide(color: Color(0xFF7A9BB5)),
+            borderRadius: BorderRadius.circular(14),
+            side: BorderSide(color: Colors.white.withOpacity(0.6)),
           ),
           child: SizedBox(
             width: 320,
@@ -2029,14 +2356,23 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
                 // Title bar
                 Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
                   decoration: const BoxDecoration(
                     gradient: LinearGradient(
-                      colors: [Color(0xFF2B6DAD), Color(0xFF4A9BD9)],
+                      colors: [
+                        Color(0xFF1A4978),
+                        Color(0xFF3A8CC4),
+                        Color(0xFF5CAEE0),
+                        Color(0xFF2F7CB5),
+                      ],
+                      stops: [0.0, 0.40, 0.55, 1.0],
                     ),
                     borderRadius: BorderRadius.only(
-                      topLeft: Radius.circular(4),
-                      topRight: Radius.circular(4),
+                      topLeft: Radius.circular(14),
+                      topRight: Radius.circular(14),
                     ),
                   ),
                   child: const Text(
@@ -2067,7 +2403,10 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(3),
-                        borderSide: const BorderSide(color: Color(0xFF3678B0), width: 2),
+                        borderSide: const BorderSide(
+                          color: Color(0xFF3678B0),
+                          width: 2,
+                        ),
                       ),
                     ),
                     style: const TextStyle(
@@ -2091,16 +2430,18 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
                     children: [
                       TextButton(
                         onPressed: () => Navigator.pop(ctx),
-                        child: const Text('Cancel',
-                            style: TextStyle(color: Color(0xFF4A6A84))),
+                        child: const Text(
+                          'Cancel',
+                          style: TextStyle(color: Color(0xFF4A6A84)),
+                        ),
                       ),
                       const SizedBox(width: 8),
                       ElevatedButton(
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF3678B0),
+                          backgroundColor: const Color(0xFF3A8CC4),
                           foregroundColor: Colors.white,
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(3),
+                            borderRadius: BorderRadius.circular(8),
                           ),
                         ),
                         onPressed: () {
@@ -2125,31 +2466,8 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
   }
 
   // ═════════════════════════════════════════════════════════════════════════
-  //  BOTTOM BAR
+  //  BOTTOM BAR (removed — space reclaimed for contact list)
   // ═════════════════════════════════════════════════════════════════════════
-  Widget _bottomBar() {
-    final l10n = AppLocalizations.of(context)!;
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Color(0xFFE8F0F6), Color(0xFFD5E2ED)],
-        ),
-        border: const Border(top: BorderSide(color: Color(0xFFAAC5DB))),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.white.withOpacity(0.6),
-            offset: const Offset(0, -1),
-            blurRadius: 0,
-          ),
-        ],
-      ),
-        child: const SizedBox.shrink(),
-    );
-  }
 }
 
 /// Simple data holder for scene color presets.

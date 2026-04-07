@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/painting.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -47,6 +48,39 @@ class ProfileAvatarNotifier extends Notifier<String?> {
     if (!file.existsSync()) {
       await prefs.remove('$_kSelfAvatarPathPrefix$email');
       return;
+    }
+
+    // Resize oversized avatars to 96×96 for WLM 2009 compatibility.
+    // WLM 2009 ignores avatars larger than ~100KB.
+    if (file.lengthSync() > 100 * 1024) {
+      try {
+        final bytes = await file.readAsBytes();
+        final codec = await ui.instantiateImageCodec(
+          bytes,
+          targetWidth: 96,
+          targetHeight: 96,
+        );
+        final frame = await codec.getNextFrame();
+        final img = frame.image;
+        final recorder = ui.PictureRecorder();
+        final canvas = Canvas(recorder, const Rect.fromLTWH(0, 0, 96, 96));
+        canvas.drawImageRect(
+          img,
+          Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble()),
+          const Rect.fromLTWH(0, 0, 96, 96),
+          Paint(),
+        );
+        final picture = recorder.endRecording();
+        final rendered = await picture.toImage(96, 96);
+        final pngData = await rendered.toByteData(
+          format: ui.ImageByteFormat.png,
+        );
+        if (pngData != null) {
+          await file.writeAsBytes(pngData.buffer.asUint8List());
+        }
+      } catch (_) {
+        // If resize fails, keep the original file.
+      }
     }
 
     if (state != path) {

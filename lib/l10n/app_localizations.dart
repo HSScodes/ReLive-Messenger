@@ -176,7 +176,7 @@ abstract class AppLocalizations {
   /// No description provided for @windowsLiveMessenger.
   ///
   /// In en, this message translates to:
-  /// **'Windows Live Messenger'**
+  /// **'reLive Messenger'**
   String get windowsLiveMessenger;
 
   /// No description provided for @changeStatus.

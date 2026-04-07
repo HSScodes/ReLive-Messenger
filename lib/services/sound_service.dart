@@ -26,62 +26,78 @@ class SoundService {
   }
 
   Future<void> playNewMessage() async {
-    // WLM 2009 uses newalert.wma for incoming messages; fall back to type.mp3.
-    if (!await _safePlayAsset('sounds/newalert.wma')) {
-      await _safePlayAsset('sounds/type.mp3');
-    }
+    await _safePlayAsset('sounds/type.wav');
   }
 
   /// Plays the given asset. Returns true if playback started successfully.
   Future<bool> _safePlayAsset(String assetPath) async {
-    // Create a fresh player per playback to avoid shared-state conflicts on
-    // Android 14+ where a single AudioPlayer can stall after repeated use.
-    final player = AudioPlayer();
-    try {
-      // Prefer AssetSource on Android — avoids temp-file / scoped-storage issues.
-      if (Platform.isAndroid) {
-        try {
-          await player.play(AssetSource(assetPath));
-          _disposeAfterPlayback(player);
-          return true;
-        } catch (e) {
-          print('[SoundService] AssetSource failed for $assetPath: $e');
-          // Fall through to temp-file approach below.
-        }
-      }
-
-      // Temp-file approach (works on Windows, fallback on Android).
-      final bytes = await _loadAssetBytes(assetPath);
-      if (bytes == null || bytes.isEmpty) {
-        print('[SoundService] Asset bytes empty for $assetPath');
-        await player.dispose();
-        if (Platform.isWindows) {
-          await SystemSound.play(SystemSoundType.click);
-        }
-        return false;
-      }
-      final file = await _writeTempSoundFile(assetPath: assetPath, bytes: bytes);
-      if (file != null) {
-        await player.play(DeviceFileSource(file.path));
-        _disposeAfterPlayback(player);
+    // ── Approach 1: SoundPool (low-latency) + AssetSource ──
+    // SoundPool is purpose-built for short notification/UI sounds on Android
+    // and handles PCM WAV reliably where MediaPlayer sometimes refuses.
+    if (Platform.isAndroid) {
+      try {
+        final lp = AudioPlayer();
+        await lp.play(AssetSource(assetPath), mode: PlayerMode.lowLatency);
+        _disposeAfterPlayback(lp);
         return true;
+      } catch (e) {
+        print('[SoundService] SoundPool AssetSource failed for $assetPath: $e');
       }
+    }
 
-      await player.play(BytesSource(bytes));
-      _disposeAfterPlayback(player);
-      return true;
-    } catch (e) {
-      print('[SoundService] Playback error for $assetPath: $e');
-      await player.dispose();
+    // ── Approach 2: MediaPlayer + AssetSource ──
+    if (Platform.isAndroid) {
+      try {
+        final mp = AudioPlayer();
+        await mp.play(AssetSource(assetPath));
+        _disposeAfterPlayback(mp);
+        return true;
+      } catch (e) {
+        print(
+          '[SoundService] MediaPlayer AssetSource failed for $assetPath: $e',
+        );
+      }
+    }
+
+    // ── Load raw bytes for the remaining fallbacks ──
+    final bytes = await _loadAssetBytes(assetPath);
+    if (bytes == null || bytes.isEmpty) {
+      print('[SoundService] Asset bytes empty for $assetPath');
       if (Platform.isWindows) {
-        try {
-          await SystemSound.play(SystemSoundType.alert);
-        } catch (e2) {
-          print('[SoundService] SystemSound fallback error: $e2');
-        }
+        await SystemSound.play(SystemSoundType.click);
       }
       return false;
     }
+
+    // ── Approach 3: Temp file + DeviceFileSource ──
+    final file = await _writeTempSoundFile(assetPath: assetPath, bytes: bytes);
+    if (file != null) {
+      try {
+        final mp = AudioPlayer();
+        await mp.play(DeviceFileSource(file.path));
+        _disposeAfterPlayback(mp);
+        return true;
+      } catch (e) {
+        print('[SoundService] DeviceFileSource failed for $assetPath: $e');
+      }
+    }
+
+    // ── Approach 4: BytesSource (last resort) ──
+    try {
+      final mp = AudioPlayer();
+      await mp.play(BytesSource(bytes));
+      _disposeAfterPlayback(mp);
+      return true;
+    } catch (e) {
+      print('[SoundService] BytesSource failed for $assetPath: $e');
+    }
+
+    if (Platform.isWindows) {
+      try {
+        await SystemSound.play(SystemSoundType.alert);
+      } catch (_) {}
+    }
+    return false;
   }
 
   /// Disposes the player after it finishes playing.

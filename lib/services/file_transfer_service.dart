@@ -7,8 +7,7 @@ import 'dart:typed_data';
 import 'package:path_provider/path_provider.dart';
 
 /// EUF-GUID for MSNP file transfer (P2P v1).
-const String fileTransferEufGuid =
-    '{5D3E02AB-6190-11D3-BBBB-00C04F795683}';
+const String fileTransferEufGuid = '{5D3E02AB-6190-11D3-BBBB-00C04F795683}';
 
 /// Represents a pending or active file transfer.
 class FileTransferSession {
@@ -137,7 +136,8 @@ class FileTransferService {
 
     final context = base64.encode(contextBytes);
 
-    final bodyText = 'EUF-GUID: $fileTransferEufGuid\r\n'
+    final bodyText =
+        'EUF-GUID: $fileTransferEufGuid\r\n'
         'SessionID: $sessionId\r\n'
         'AppID: 2\r\n'
         'Context: $context\r\n\r\n';
@@ -172,10 +172,7 @@ class FileTransferService {
     _sessions[sessionId] = session;
     _sessionsByCallId[callId] = session;
 
-    return FileTransferInviteResult(
-      bytes: p2pBytes,
-      session: session,
-    );
+    return FileTransferInviteResult(bytes: p2pBytes, session: session);
   }
 
   // ── Inbound: parse incoming INVITE ─────────────────────────────────────
@@ -200,9 +197,11 @@ class FileTransferService {
     String fileName = 'unknown';
     int fileSize = 0;
 
-    print('[FT] parseIncomingInvite: sessionId=$sessionId callId=$callId '
-        'contextB64.length=${contextB64.length} '
-        'contextB64=${contextB64.length > 80 ? contextB64.substring(0, 80) + "..." : contextB64}');
+    print(
+      '[FT] parseIncomingInvite: sessionId=$sessionId callId=$callId '
+      'contextB64.length=${contextB64.length} '
+      'contextB64=${contextB64.length > 80 ? "${contextB64.substring(0, 80)}..." : contextB64}',
+    );
 
     if (contextB64.isNotEmpty) {
       try {
@@ -212,7 +211,9 @@ class FileTransferService {
         b64 = b64.replaceAll('=', '');
         // 4n+1 is never valid base64; trim the trailing garbage char
         if (b64.length % 4 == 1 && b64.isNotEmpty) {
-          print('[FT] Context base64 length ${b64.length} is 4n+1 — trimming last char');
+          print(
+            '[FT] Context base64 length ${b64.length} is 4n+1 — trimming last char',
+          );
           b64 = b64.substring(0, b64.length - 1);
         }
         // Re-add proper padding
@@ -398,9 +399,11 @@ class FileTransferService {
     session.lastChunkTime = DateTime.now();
     _progressController.add(session);
 
-    print('[FT] handleDataChunk: session=$sessionId offset=$offset '
-        'takeBytes=$takeBytes transferred=${session.bytesTransferred}/${session.fileSize} '
-        'isComplete=${session.isComplete}');
+    print(
+      '[FT] handleDataChunk: session=$sessionId offset=$offset '
+      'takeBytes=$takeBytes transferred=${session.bytesTransferred}/${session.fileSize} '
+      'isComplete=${session.isComplete}',
+    );
 
     if (session.isComplete) {
       print('[FT] Transfer complete — saving file: ${session.fileName}');
@@ -424,7 +427,9 @@ class FileTransferService {
           .replaceAll(RegExp(r'\s+'), ' ')
           .trim();
       final file = File('${dir.path}${Platform.pathSeparator}$safeName');
-      print('[FT] Saving file: ${file.path} (${session.assembledBytes.length} bytes)');
+      print(
+        '[FT] Saving file: ${file.path} (${session.assembledBytes.length} bytes)',
+      );
       await file.writeAsBytes(session.assembledBytes, flush: true);
       session.localPath = file.path;
       print('[FT] File saved successfully: ${file.path}');
@@ -437,8 +442,9 @@ class FileTransferService {
 
   Future<Directory> _downloadDir() async {
     final docs = await getApplicationDocumentsDirectory();
-    final dir =
-        Directory('${docs.path}${Platform.pathSeparator}wlm_received_files');
+    final dir = Directory(
+      '${docs.path}${Platform.pathSeparator}wlm_received_files',
+    );
     if (!dir.existsSync()) await dir.create(recursive: true);
     return dir;
   }
@@ -492,10 +498,12 @@ class FileTransferService {
   void failActiveSessionsForPeer(String peerEmail) {
     final normalised = peerEmail.toLowerCase().trim();
     final toFail = _sessions.values
-        .where((s) =>
-            !s.isOutgoing &&
-            !s.isComplete &&
-            s.peerEmail.toLowerCase().trim() == normalised)
+        .where(
+          (s) =>
+              !s.isOutgoing &&
+              !s.isComplete &&
+              s.peerEmail.toLowerCase().trim() == normalised,
+        )
         .toList();
     for (final s in toFail) {
       _stallTimers.remove(s.sessionId)?.cancel();
@@ -523,18 +531,24 @@ class FileTransferService {
   // ── Helpers ────────────────────────────────────────────────────────────
 
   List<int> _buildP2pPayload(
-      int sessionId, int baseId, int flags, String slpText,
-      {int footer = 0}) {
+    int sessionId,
+    int baseId,
+    int flags,
+    String slpText, {
+    int footer = 0,
+  }) {
+    // Null-terminate the SLP text on the wire.  TotalDataSize / MessageSize
+    // INCLUDE the null terminator (matching WLM 2009 / MSNPSharp).
     final rawSlpBytes = utf8.encode(slpText);
     final slpBytes = [...rawSlpBytes, 0];
-    final textLength = rawSlpBytes.length;
+    final bodyLength = slpBytes.length; // WITH null terminator
 
     final header = ByteData(48);
     header.setUint32(0, sessionId, Endian.little);
     header.setUint32(4, baseId, Endian.little);
     header.setUint64(8, 0, Endian.little);
-    header.setUint64(16, textLength, Endian.little);
-    header.setUint32(24, textLength, Endian.little);
+    header.setUint64(16, bodyLength, Endian.little);
+    header.setUint32(24, bodyLength, Endian.little);
     header.setUint32(28, flags, Endian.little);
 
     final footerBytes = ByteData(4);
@@ -555,6 +569,7 @@ class FileTransferService {
       final maxBits = (n * 4).clamp(1, 30);
       return r.nextInt(1 << maxBits).toRadixString(16).padLeft(n, '0');
     }
+
     return '${hex(4)}${hex(4)}-${hex(4)}-4${hex(3)}-${(8 + r.nextInt(4)).toRadixString(16)}${hex(3)}-${hex(4)}${hex(4)}${hex(4)}';
   }
 
@@ -578,10 +593,7 @@ class FileTransferService {
 }
 
 class FileTransferInviteResult {
-  const FileTransferInviteResult({
-    required this.bytes,
-    required this.session,
-  });
+  const FileTransferInviteResult({required this.bytes, required this.session});
 
   final List<int> bytes;
   final FileTransferSession session;

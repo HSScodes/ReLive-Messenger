@@ -28,7 +28,8 @@ class MsnSlpService {
     // only data-transfer frames carry the negotiated non-zero session ID.
     final sessionId = _random.nextInt(0x7FFFFFFE) + 1; // 1 .. 0x7FFFFFFF
 
-    final bodyText = 'EUF-GUID: $displayPictureEufGuid\r\n'
+    final bodyText =
+        'EUF-GUID: $displayPictureEufGuid\r\n'
         'SessionID: $sessionId\r\n'
         'AppID: $displayPictureAppId\r\n'
         'Context: $context\r\n\r\n';
@@ -78,7 +79,8 @@ class MsnSlpService {
   }) {
     // Per MSNSLP spec the ACK body is empty (Content-Length: 0).
     // CSeq: 1 because this ACK follows the peer's 200 OK (which had CSeq: 1).
-    final slpText = 'ACK MSNMSGR:$peerEmail MSNSLP/1.0\r\n'
+    final slpText =
+        'ACK MSNMSGR:$peerEmail MSNSLP/1.0\r\n'
         'To: <msnmsgr:$peerEmail>\r\n'
         'From: <msnmsgr:$myEmail>\r\n'
         'Via: MSNSLP/1.0/TLP ;branch=$branchId\r\n'
@@ -108,14 +110,18 @@ class MsnSlpService {
     // (TotalDataSize of this ACK frame) and offset 40-47 (AckDataSize field).
     final ackBaseId = _random.nextInt(0x7fffffff);
     final header = ByteData(48);
-    header.setUint32(0, 0, Endian.little);              // SessionID = 0
-    header.setUint32(4, ackBaseId, Endian.little);      // BaseID (our local)
-    header.setUint64(8, 0, Endian.little);              // Offset
-    header.setUint64(16, ackedTotalSize, Endian.little);// TotalDataSize = acked
-    header.setUint32(24, 0, Endian.little);             // MessageSize = 0
-    header.setUint32(28, 0x02, Endian.little);          // Flags = ACK
+    header.setUint32(0, 0, Endian.little); // SessionID = 0
+    header.setUint32(4, ackBaseId, Endian.little); // BaseID (our local)
+    header.setUint64(8, 0, Endian.little); // Offset
+    header.setUint64(
+      16,
+      ackedTotalSize,
+      Endian.little,
+    ); // TotalDataSize = acked
+    header.setUint32(24, 0, Endian.little); // MessageSize = 0
+    header.setUint32(28, 0x02, Endian.little); // Flags = ACK
     header.setUint32(32, incomingSessionId, Endian.little); // AckSessionID
-    header.setUint32(36, incomingBaseId, Endian.little);    // AckBaseID
+    header.setUint32(36, incomingBaseId, Endian.little); // AckBaseID
     // AckDataSize is uint64; safe to store size as lower 32 bits.
     header.setUint32(40, ackedTotalSize & 0xFFFFFFFF, Endian.little);
     header.setUint32(44, (ackedTotalSize >> 32) & 0xFFFFFFFF, Endian.little);
@@ -138,25 +144,29 @@ class MsnSlpService {
     int flags,
     String slpText, {
     int footer = 0,
+    int ackSessionId = 0,
+    int ackUniqueId = 0,
+    int ackDataSize = 0,
   }) {
     // Null-terminate the SLP text on the wire — MSNP P2P requires all SLP
-    // payloads to end with \0.  But TotalDataSize / MessageSize in the binary
-    // header use the string length WITHOUT the null terminator (matching
-    // libpurple / Pidgin behavior).  The footer is NOT counted in sizes.
+    // payloads to end with \0.  TotalDataSize / MessageSize in the binary
+    // header INCLUDE the null terminator (matching WLM 2009 / MSNPSharp).
+    // The footer is NOT counted in sizes.
     final rawSlpBytes = utf8.encode(slpText);
     final slpBytes = [...rawSlpBytes, 0];
-    final textLength = rawSlpBytes.length; // WITHOUT null
+    final bodyLength = slpBytes.length; // WITH null terminator
 
     final header = ByteData(48);
     header.setUint32(0, sessionId, Endian.little);
     header.setUint32(4, baseId, Endian.little);
     header.setUint64(8, 0, Endian.little);
-    header.setUint64(16, textLength, Endian.little);
-    header.setUint32(24, textLength, Endian.little);
+    header.setUint64(16, bodyLength, Endian.little);
+    header.setUint32(24, bodyLength, Endian.little);
     header.setUint32(28, flags, Endian.little);
-    header.setUint32(32, 0, Endian.little);
-    header.setUint32(36, 0, Endian.little);
-    header.setUint64(40, 0, Endian.little);
+    header.setUint32(32, ackSessionId, Endian.little);
+    header.setUint32(36, ackUniqueId, Endian.little);
+    header.setUint32(40, ackDataSize & 0xFFFFFFFF, Endian.little);
+    header.setUint32(44, (ackDataSize >> 32) & 0xFFFFFFFF, Endian.little);
 
     final footerBytes = ByteData(4);
     footerBytes.setUint32(0, footer, Endian.big);
@@ -181,10 +191,10 @@ class MsnSlpService {
     final header = ByteData(48);
     header.setUint32(0, sessionId, Endian.little);
     header.setUint32(4, baseId, Endian.little);
-    header.setUint64(8, offset, Endian.little);         // Offset
-    header.setUint64(16, totalSize, Endian.little);      // TotalDataSize
+    header.setUint64(8, offset, Endian.little); // Offset
+    header.setUint64(16, totalSize, Endian.little); // TotalDataSize
     header.setUint32(24, chunkData.length, Endian.little); // MessageSize
-    header.setUint32(28, flags, Endian.little);           // Flags (0x20 = data)
+    header.setUint32(28, flags, Endian.little); // Flags (0x20 = data)
     header.setUint32(32, 0, Endian.little);
     header.setUint32(36, 0, Endian.little);
     header.setUint64(40, 0, Endian.little);
@@ -219,10 +229,10 @@ class MsnSlpService {
     final header = ByteData(48);
     header.setUint32(0, sessionId, Endian.little);
     header.setUint32(4, baseId, Endian.little);
-    header.setUint64(8, 0, Endian.little);          // Offset = 0
-    header.setUint64(16, 4, Endian.little);          // TotalDataSize = 4
-    header.setUint32(24, 4, Endian.little);          // MessageSize = 4
-    header.setUint32(28, 0, Endian.little);          // Flags = 0x00
+    header.setUint64(8, 0, Endian.little); // Offset = 0
+    header.setUint64(16, 4, Endian.little); // TotalDataSize = 4
+    header.setUint32(24, 4, Endian.little); // MessageSize = 4
+    header.setUint32(28, 0, Endian.little); // Flags = 0x00
     header.setUint32(32, 0, Endian.little);
     header.setUint32(36, 0, Endian.little);
     header.setUint64(40, 0, Endian.little);
@@ -248,7 +258,8 @@ class MsnSlpService {
     required String callId,
     required int sessionId,
   }) {
-    final bodyText = 'Bridge: SBBridge\r\n'
+    final bodyText =
+        'Bridge: SBBridge\r\n'
         'Listening: false\r\n'
         'Hashed-Nonce: {00000000-0000-0000-0000-000000000000}\r\n'
         'SessionID: $sessionId\r\n'
@@ -275,7 +286,8 @@ class MsnSlpService {
 
   bool isP2pPayloadBytes(List<int> payloadBytes) {
     final payload = ascii.decode(payloadBytes, allowInvalid: true);
-    final contentType = _extractHeader(payload, 'Content-Type')?.toLowerCase() ?? '';
+    final contentType =
+        _extractHeader(payload, 'Content-Type')?.toLowerCase() ?? '';
     if (contentType.contains('application/x-msnmsgrp2p')) {
       return true;
     }
@@ -303,15 +315,17 @@ class MsnSlpService {
       return null;
     }
 
-    final header = ByteData.sublistView(Uint8List.fromList(p2pBytes.sublist(0, 48)));
+    final header = ByteData.sublistView(
+      Uint8List.fromList(p2pBytes.sublist(0, 48)),
+    );
     final sessionId = header.getUint32(0, Endian.little);
-    final baseId   = header.getUint32(4, Endian.little);
-    final offset   = header.getUint64(8, Endian.little);
-    final totalSize   = header.getUint64(16, Endian.little);
+    final baseId = header.getUint32(4, Endian.little);
+    final offset = header.getUint64(8, Endian.little);
+    final totalSize = header.getUint64(16, Endian.little);
     final messageSize = header.getUint32(24, Endian.little);
-    final flags       = header.getUint32(28, Endian.little);
+    final flags = header.getUint32(28, Endian.little);
     final ackSessionId = header.getUint32(32, Endian.little);
-    final ackUniqueId  = header.getUint32(36, Endian.little);
+    final ackUniqueId = header.getUint32(36, Endian.little);
 
     if (messageSize == 0) {
       return P2pInboundFrame(
@@ -328,11 +342,16 @@ class MsnSlpService {
     }
 
     final availableBody = p2pBytes.length - 48;
-    final wantedSize = messageSize > availableBody ? availableBody : messageSize;
+    final wantedSize = messageSize > availableBody
+        ? availableBody
+        : messageSize;
     final slpBytes = wantedSize <= 0
         ? const <int>[]
         : p2pBytes.sublist(48, 48 + wantedSize);
-    final slpText = utf8.decode(slpBytes, allowMalformed: true).replaceAll('\u0000', '').trim();
+    final slpText = utf8
+        .decode(slpBytes, allowMalformed: true)
+        .replaceAll('\u0000', '')
+        .trim();
 
     return P2pInboundFrame(
       sessionId: sessionId,
@@ -510,20 +529,14 @@ class MsnSlpService {
 }
 
 class _HeaderBodySplit {
-  const _HeaderBodySplit({
-    required this.headers,
-    required this.body,
-  });
+  const _HeaderBodySplit({required this.headers, required this.body});
 
   final String headers;
   final String body;
 }
 
 class _HeaderBodySplitBytes {
-  const _HeaderBodySplitBytes({
-    required this.headers,
-    required this.body,
-  });
+  const _HeaderBodySplitBytes({required this.headers, required this.body});
 
   final List<int> headers;
   final List<int> body;
@@ -543,6 +556,7 @@ class P2pInboundFrame {
   });
 
   final int sessionId;
+
   /// The sender's BaseID (identifier field at header offset 4).
   final int baseId;
   final int offset;
@@ -550,8 +564,10 @@ class P2pInboundFrame {
   final int messageSize;
   final int flags;
   final String slpText;
+
   /// AckSessionID at offset 32 — identifies the session being ACK/NAK'd.
   final int ackSessionId;
+
   /// AckUniqueID at offset 36 — identifies the baseId being ACK/NAK'd.
   final int ackUniqueId;
 }

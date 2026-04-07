@@ -88,7 +88,7 @@ class _WlmAppState extends ConsumerState<WlmApp>
       androidNotificationOptions: AndroidNotificationOptions(
         channelId: 'wlm_foreground_service',
         channelName: 'WLM Background Service',
-        channelDescription: 'Keeps Windows Live Messenger connected',
+        channelDescription: 'Keeps reLive Messenger connected',
         channelImportance: NotificationChannelImportance.LOW,
         priority: NotificationPriority.LOW,
         enableVibration: false,
@@ -118,7 +118,7 @@ class _WlmAppState extends ConsumerState<WlmApp>
       return;
     }
     final result = await FlutterForegroundTask.startService(
-      notificationTitle: 'Windows Live Messenger',
+      notificationTitle: 'reLive Messenger',
       notificationText: 'Connected in background',
       notificationIcon: const NotificationIcon(
         metaDataName: 'com.example.wlm_foreground_icon',

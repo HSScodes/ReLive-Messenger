@@ -32,28 +32,49 @@ class _P2pInboundSession {
   _P2pInboundSession({
     required this.sessionId,
     required this.peerEmail,
-    required this.totalSize,
-  }) : _buffer = Uint8List(totalSize.toInt() > 0 ? totalSize.toInt() : 0);
+    int totalSize = 0,
+  }) : _totalSize = totalSize,
+       _buffer = totalSize > 0 ? Uint8List(totalSize) : null;
 
   final int sessionId;
   final String peerEmail;
-  final int totalSize; // 64-bit value from header (fits in int for any real image)
 
-  final Uint8List _buffer;
+  int _totalSize;
+  int get totalSize => _totalSize;
+
+  Uint8List? _buffer;
   int _bytesReceived = 0;
 
-  bool get isComplete => _bytesReceived >= totalSize && totalSize > 0;
+  bool get isComplete => _bytesReceived >= _totalSize && _totalSize > 0;
+
+  /// Update totalSize and (re)allocate the buffer when we learn the real size
+  /// from a data chunk's P2P header.
+  void ensureBuffer(int newTotalSize) {
+    if (newTotalSize <= 0) return;
+    if (_totalSize > 0 && _buffer != null) return; // already set up
+    _totalSize = newTotalSize;
+    _buffer = Uint8List(newTotalSize);
+    print('[P2P] Session $sessionId: buffer allocated for $newTotalSize bytes');
+  }
 
   /// Write [data] at [offset] inside the assembly buffer.
   void write(int offset, List<int> data) {
     if (offset < 0 || data.isEmpty) return;
+    if (_buffer == null) {
+      print('[P2P] Session $sessionId: write() called but no buffer (totalSize=$_totalSize)');
+      return;
+    }
     final end = offset + data.length;
-    if (end > _buffer.length) return; // malformed — ignore
-    _buffer.setRange(offset, end, data);
+    if (end > _buffer!.length) {
+      print('[P2P] Session $sessionId: write out of bounds offset=$offset '
+          'len=${data.length} end=$end bufLen=${_buffer!.length}');
+      return;
+    }
+    _buffer!.setRange(offset, end, data);
     _bytesReceived = _bytesReceived < end ? end : _bytesReceived;
   }
 
-  Uint8List get assembledBytes => _buffer;
+  Uint8List get assembledBytes => _buffer ?? Uint8List(0);
 }
 
 /// Manages all active inbound P2P display-picture sessions and gives back
@@ -139,6 +160,15 @@ class P2pSessionManager {
     required int totalSize,
   }) {
     if (sessionId == 0) return;
+    final existing = _sessions[sessionId];
+    if (existing != null) {
+      // Session already exists (e.g. data arrived before 200 OK).
+      // Only upgrade the buffer if a valid totalSize is now known.
+      if (totalSize > 0) existing.ensureBuffer(totalSize);
+      print('[P2P] openSession: session $sessionId already exists '
+          '(existing.totalSize=${existing.totalSize}, incoming=$totalSize)');
+      return;
+    }
     _sessions[sessionId] = _P2pInboundSession(
       sessionId: sessionId,
       peerEmail: peerEmail,
@@ -161,21 +191,24 @@ class P2pSessionManager {
   }) async {
     if (sessionId == 0 || messageSize == 0) return;
 
-    // Lazily open session if 200 OK was missed, or update totalSize if the
-    // session was previously opened with 0 (field missing from 200 OK body).
-    final existing = _sessions[sessionId];
-    if (existing == null || (existing.totalSize == 0 && totalSize > 0)) {
-      _sessions[sessionId] = _P2pInboundSession(
+    // Ensure session exists (may need to create lazily if 200 OK was missed).
+    var session = _sessions[sessionId];
+    if (session == null) {
+      session = _P2pInboundSession(
         sessionId: sessionId,
         peerEmail: peerEmail,
         totalSize: totalSize,
       );
+      _sessions[sessionId] = session;
+      print('[P2P] Lazily created session $sessionId (totalSize=$totalSize)');
     }
 
-    final session = _sessions[sessionId]!;
+    // Ensure the buffer is allocated — the 200 OK often has totalSize=0,
+    // but data chunks carry the real totalSize in the P2P binary header.
+    if (totalSize > 0) session.ensureBuffer(totalSize);
 
     // Data bytes start at index 48 (after P2P header), up to messageSize.
-    final headerEnd = 48;
+    const headerEnd = 48;
     if (rawP2pBytes.length < headerEnd) return;
     final available = rawP2pBytes.length - headerEnd;
     final takeBytes = messageSize < available ? messageSize : available;
@@ -191,7 +224,8 @@ class P2pSessionManager {
       totalSize: session.totalSize,
     );
     print(
-      '[P2P] Session $sessionId: received ${session._bytesReceived}/${session.totalSize} bytes',
+      '[P2P] Session $sessionId: chunk offset=$offset len=$takeBytes '
+      'received=${session._bytesReceived}/${session.totalSize}',
     );
 
     if (session.isComplete) {
@@ -201,7 +235,43 @@ class P2pSessionManager {
   }
 
   void closeSession(int sessionId) {
-    _sessions.remove(sessionId);
+    final session = _sessions.remove(sessionId);
+    if (session != null) {
+      // Clear the "Downloading..." status so it doesn't stay stuck in the UI.
+      _statusByEmail.remove(session.peerEmail.trim().toLowerCase());
+      if (!_statusController.isClosed) {
+        _statusController.add(Map.unmodifiable(_statusByEmail));
+      }
+      print('[P2P] Closed session $sessionId for ${session.peerEmail} '
+          '(received ${session._bytesReceived}/${session.totalSize})');
+    }
+  }
+
+  /// Returns the peer email for a given session, or null.
+  String? peerEmailForSession(int sessionId) {
+    return _sessions[sessionId]?.peerEmail;
+  }
+
+  /// Close all sessions for a given peer (e.g. when switchboard disconnects).
+  void closeAllSessionsForPeer(String peerEmail) {
+    final key = peerEmail.trim().toLowerCase();
+    final toRemove = <int>[];
+    for (final entry in _sessions.entries) {
+      if (entry.value.peerEmail.trim().toLowerCase() == key) {
+        toRemove.add(entry.key);
+        print('[P2P] Closing session ${entry.key} for $key '
+            '(received ${entry.value._bytesReceived}/${entry.value.totalSize})');
+      }
+    }
+    for (final sid in toRemove) {
+      _sessions.remove(sid);
+    }
+    if (toRemove.isNotEmpty) {
+      _statusByEmail.remove(key);
+      if (!_statusController.isClosed) {
+        _statusController.add(Map.unmodifiable(_statusByEmail));
+      }
+    }
   }
 
   // ---- File saving --------------------------------------------------------

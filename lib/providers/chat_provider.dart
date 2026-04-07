@@ -29,9 +29,10 @@ class InboundChatEmailNotifier extends Notifier<String?> {
   }
 }
 
-final inboundChatEmailProvider = NotifierProvider<InboundChatEmailNotifier, String?>(
-  InboundChatEmailNotifier.new,
-);
+final inboundChatEmailProvider =
+    NotifierProvider<InboundChatEmailNotifier, String?>(
+      InboundChatEmailNotifier.new,
+    );
 
 class TypingContactsNotifier extends Notifier<Set<String>> {
   final Map<String, Timer> _timers = <String, Timer>{};
@@ -69,9 +70,10 @@ class TypingContactsNotifier extends Notifier<Set<String>> {
   }
 }
 
-final typingContactsProvider = NotifierProvider<TypingContactsNotifier, Set<String>>(
-  TypingContactsNotifier.new,
-);
+final typingContactsProvider =
+    NotifierProvider<TypingContactsNotifier, Set<String>>(
+      TypingContactsNotifier.new,
+    );
 
 class ActiveChatEmailNotifier extends Notifier<String?> {
   @override
@@ -88,9 +90,10 @@ class ActiveChatEmailNotifier extends Notifier<String?> {
   }
 }
 
-final activeChatEmailProvider = NotifierProvider<ActiveChatEmailNotifier, String?>(
-  ActiveChatEmailNotifier.new,
-);
+final activeChatEmailProvider =
+    NotifierProvider<ActiveChatEmailNotifier, String?>(
+      ActiveChatEmailNotifier.new,
+    );
 
 /// Global counter incremented on every incoming nudge. Widgets (e.g. the root
 /// app shell) watch this to trigger a screen-wide shake animation.
@@ -103,8 +106,8 @@ class NudgeEventCounterNotifier extends Notifier<int> {
 
 final nudgeEventCounterProvider =
     NotifierProvider<NudgeEventCounterNotifier, int>(
-  NudgeEventCounterNotifier.new,
-);
+      NudgeEventCounterNotifier.new,
+    );
 
 class ChatNotifier extends Notifier<List<Message>> {
   StreamSubscription<MsnpEvent>? _subscription;
@@ -157,18 +160,12 @@ class ChatNotifier extends Notifier<List<Message>> {
     }
 
     if (event.type == MsnpEventType.typing) {
-      await _soundService.playTyping();
       ref.read(typingContactsProvider.notifier).markTyping(event.from!);
       return;
     }
 
     if (event.type == MsnpEventType.nudge) {
-      // Only play in-app sound when foreground; the notification channel
-      // handles sound when backgrounded (avoids double audio).
-      final lifecycle = ref.read(appLifecycleProvider);
-      if (lifecycle == AppLifecycleState.resumed) {
-        await _soundService.playNudge();
-      }
+      await _soundService.playNudge();
       // Increment global nudge counter so the root shell shakes the entire UI.
       ref.read(nudgeEventCounterProvider.notifier).increment();
       _appendMessage(
@@ -205,17 +202,20 @@ class ChatNotifier extends Notifier<List<Message>> {
         final client = ref.read(msnpClientProvider);
         final session = client.fileTransferService.getSession(sessionId);
         if (session != null) {
-          _appendMessage(Message(
-            from: from,
-            to: client.selfEmail,
-            body: 'wants to send you ${session.fileName} (${_formatBytes(session.fileSize)})',
-            timestamp: DateTime.now(),
-            isFileTransfer: true,
-            fileTransferId: '$sessionId',
-            fileName: session.fileName,
-            fileSize: session.fileSize,
-            fileTransferState: FileTransferState.offered,
-          ));
+          _appendMessage(
+            Message(
+              from: from,
+              to: client.selfEmail,
+              body:
+                  'wants to send you ${session.fileName} (${_formatBytes(session.fileSize)})',
+              timestamp: DateTime.now(),
+              isFileTransfer: true,
+              fileTransferId: '$sessionId',
+              fileName: session.fileName,
+              fileSize: session.fileSize,
+              fileTransferState: FileTransferState.offered,
+            ),
+          );
         }
       }
       return;
@@ -226,8 +226,7 @@ class ChatNotifier extends Notifier<List<Message>> {
       final from = (event.from ?? '').trim();
       final sessionId = int.tryParse(event.body ?? '');
       if (from.isNotEmpty && sessionId != null) {
-        _updateFileTransferState(
-            '$sessionId', FileTransferState.transferring);
+        _updateFileTransferState('$sessionId', FileTransferState.transferring);
 
         // Read the file from disk and start sending data chunks.
         final client = ref.read(msnpClientProvider);
@@ -235,11 +234,13 @@ class ChatNotifier extends Notifier<List<Message>> {
         if (session != null && session.localPath != null) {
           try {
             final fileBytes = File(session.localPath!).readAsBytesSync();
-            unawaited(client.sendFileData(
-              sessionId: sessionId,
-              fileBytes: Uint8List.fromList(fileBytes),
-              to: from,
-            ));
+            unawaited(
+              client.sendFileData(
+                sessionId: sessionId,
+                fileBytes: Uint8List.fromList(fileBytes),
+                to: from,
+              ),
+            );
           } catch (e) {
             print('[FT] Error reading file for transfer: $e');
             _updateFileTransferState('$sessionId', FileTransferState.failed);
@@ -271,15 +272,11 @@ class ChatNotifier extends Notifier<List<Message>> {
       final incoming = event.from!.toLowerCase();
       final isContactMessage = incoming.contains('@');
       if (isContactMessage) {
-        // Only play in-app sound when foreground; the notification channel
-        // handles sound when backgrounded (avoids double audio).
-        final lifecycle = ref.read(appLifecycleProvider);
-        if (lifecycle == AppLifecycleState.resumed) {
-          await _soundService.playNewMessage();
-        }
+        await _soundService.playNewMessage();
       }
       final activeEmail = ref.read(activeChatEmailProvider);
-      if (isContactMessage && (activeEmail == null || activeEmail != incoming)) {
+      if (isContactMessage &&
+          (activeEmail == null || activeEmail != incoming)) {
         ref.read(contactsProvider.notifier).incrementUnreadForEmail(incoming);
       }
       ref.read(typingContactsProvider.notifier).clearTyping(event.from!);
@@ -297,8 +294,11 @@ class ChatNotifier extends Notifier<List<Message>> {
     }
   }
 
-  void _notifyIfBackgrounded(String senderEmail, String body,
-      {bool isNudge = false}) {
+  void _notifyIfBackgrounded(
+    String senderEmail,
+    String body, {
+    bool isNudge = false,
+  }) {
     final lifecycle = ref.read(appLifecycleProvider);
     if (lifecycle != AppLifecycleState.paused &&
         lifecycle != AppLifecycleState.inactive) {
@@ -342,10 +342,7 @@ class ChatNotifier extends Notifier<List<Message>> {
         .toList(growable: false);
   }
 
-  Future<void> sendMessage({
-    required String to,
-    required String body,
-  }) async {
+  Future<void> sendMessage({required String to, required String body}) async {
     final client = ref.read(msnpClientProvider);
     final cleanBody = body.trim();
     if (cleanBody.isEmpty) {
@@ -356,12 +353,7 @@ class ChatNotifier extends Notifier<List<Message>> {
     ref.read(typingContactsProvider.notifier).clearTyping(to);
     final from = client.selfEmail.isEmpty ? 'me' : client.selfEmail;
     _appendMessage(
-      Message(
-        from: from,
-        to: to,
-        body: cleanBody,
-        timestamp: DateTime.now(),
-      ),
+      Message(from: from, to: to, body: cleanBody, timestamp: DateTime.now()),
     );
   }
 
@@ -373,6 +365,7 @@ class ChatNotifier extends Notifier<List<Message>> {
   Future<void> sendNudge(String to) async {
     final client = ref.read(msnpClientProvider);
     await client.sendNudge(to: to);
+    await _soundService.playNudge();
 
     final from = client.selfEmail.isEmpty ? 'me' : client.selfEmail;
     _appendMessage(
@@ -389,10 +382,7 @@ class ChatNotifier extends Notifier<List<Message>> {
   // ── File transfer methods ──────────────────────────────────────────────
 
   /// Initiate sending a file to a contact.
-  Future<void> sendFile({
-    required String to,
-    required String filePath,
-  }) async {
+  Future<void> sendFile({required String to, required String filePath}) async {
     final file = File(filePath);
     if (!file.existsSync()) return;
     final fileName = filePath.split(Platform.pathSeparator).last;
@@ -412,18 +402,20 @@ class ChatNotifier extends Notifier<List<Message>> {
       session.localPath = filePath;
     }
 
-    _appendMessage(Message(
-      from: from,
-      to: to,
-      body: 'Sending $fileName (${_formatBytes(fileSize)})',
-      timestamp: DateTime.now(),
-      isFileTransfer: true,
-      fileTransferId: '$sessionId',
-      fileName: fileName,
-      fileSize: fileSize,
-      filePath: filePath,
-      fileTransferState: FileTransferState.offered,
-    ));
+    _appendMessage(
+      Message(
+        from: from,
+        to: to,
+        body: 'Sending $fileName (${_formatBytes(fileSize)})',
+        timestamp: DateTime.now(),
+        isFileTransfer: true,
+        fileTransferId: '$sessionId',
+        fileName: fileName,
+        fileSize: fileSize,
+        filePath: filePath,
+        fileTransferState: FileTransferState.offered,
+      ),
+    );
   }
 
   /// Accept an incoming file transfer.
@@ -435,8 +427,7 @@ class ChatNotifier extends Notifier<List<Message>> {
     final session = client.fileTransferService.getSession(sessionId);
     if (session == null) return;
 
-    client.acceptFileTransfer(
-        sessionId: sessionId, from: session.peerEmail);
+    client.acceptFileTransfer(sessionId: sessionId, from: session.peerEmail);
     _updateFileTransferState(fileTransferId, FileTransferState.accepted);
   }
 
@@ -449,8 +440,7 @@ class ChatNotifier extends Notifier<List<Message>> {
     final session = client.fileTransferService.getSession(sessionId);
     if (session == null) return;
 
-    client.declineFileTransfer(
-        sessionId: sessionId, from: session.peerEmail);
+    client.declineFileTransfer(sessionId: sessionId, from: session.peerEmail);
     _updateFileTransferState(fileTransferId, FileTransferState.declined);
   }
 
@@ -473,10 +463,7 @@ class ChatNotifier extends Notifier<List<Message>> {
 
   /// Called when a file transfer stalls (no data for 30 s).
   void _onFileTransferFailed(FileTransferSession session) {
-    _updateFileTransferState(
-      '${session.sessionId}',
-      FileTransferState.failed,
-    );
+    _updateFileTransferState('${session.sessionId}', FileTransferState.failed);
   }
 
   void _updateFileTransferState(
@@ -485,7 +472,8 @@ class ChatNotifier extends Notifier<List<Message>> {
     String? filePath,
   }) {
     final idx = state.lastIndexWhere(
-        (m) => m.isFileTransfer && m.fileTransferId == fileTransferId);
+      (m) => m.isFileTransfer && m.fileTransferId == fileTransferId,
+    );
     if (idx == -1) return;
     final updated = state[idx].copyWith(
       fileTransferState: newState,
@@ -504,4 +492,6 @@ class ChatNotifier extends Notifier<List<Message>> {
   }
 }
 
-final chatProvider = NotifierProvider<ChatNotifier, List<Message>>(ChatNotifier.new);
+final chatProvider = NotifierProvider<ChatNotifier, List<Message>>(
+  ChatNotifier.new,
+);

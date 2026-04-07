@@ -75,6 +75,7 @@ flutter:
     - assets/sounds/
     - assets/images/
     - assets/images/extracted/
+    - assets/images/extracted/login_anim/
     - assets/images/extracted/custsat/
     - assets/images/extracted/liveNatTrav/
     - assets/images/extracted/livetransport/
