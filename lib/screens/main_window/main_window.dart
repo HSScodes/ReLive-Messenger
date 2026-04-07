@@ -649,22 +649,34 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
               ],
             ),
             child: Stack(alignment: Alignment.center, children: [
-              // Photo — inset ~15.5% to sit inside the aero frame center
+              // Photo — inset ~10% to sit inside the aero frame center
               Positioned(
-                top: 10, left: 10, right: 10, bottom: 10,
+                top: 6, left: 6, right: 6, bottom: 6,
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(3),
                   child: _selfAvatarImg(avatarPath),
                 ),
               ),
-              // Aero glass frame, recolored by current status
+              // Aero glass frame — light tint preserving glass highlights
               Positioned.fill(
                 child: ColorFiltered(
                   colorFilter: ColorFilter.mode(
-                    frameColor.withValues(alpha: 0.85),
+                    frameColor.withValues(alpha: 0.45),
                     BlendMode.srcATop,
                   ),
                   child: Image.asset(_assetAvatarFrame, fit: BoxFit.fill),
+                ),
+              ),
+              // Status glow edge
+              Positioned.fill(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: frameColor.withValues(alpha: 0.7),
+                      width: 1.5,
+                    ),
+                  ),
                 ),
               ),
               // Status icon overlay bottom-right

@@ -766,15 +766,8 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
       height: 30,
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 6),
+      clipBehavior: Clip.hardEdge,
       decoration: BoxDecoration(
-        image: DecorationImage(
-          image: const AssetImage(_assetChromeBarLight),
-          fit: BoxFit.fill,
-          colorFilter: ColorFilter.mode(
-            const Color(0xFF8AB8D8).withValues(alpha: 0.12),
-            BlendMode.srcATop,
-          ),
-        ),
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
@@ -787,6 +780,17 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
           stops: [0.0, 0.35, 0.5, 1.0],
         ),
       ),
+      foregroundDecoration: BoxDecoration(
+        image: DecorationImage(
+          image: const AssetImage(_assetChromeBarLight),
+          // 9-slice: preserve 6px at left/right edges, stretch center
+          centerSlice: const Rect.fromLTRB(6, 0, 594, 31),
+          colorFilter: ColorFilter.mode(
+            const Color(0xFF8AB8D8).withValues(alpha: 0.12),
+            BlendMode.srcATop,
+          ),
+        ),
+      ),
       child: Row(
         children: [
           // Windows 7 Explorer circular back button
@@ -794,34 +798,45 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
             size: 26,
             onPressed: () => Navigator.of(context).pop(),
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: 8),
+          // Vertical separator
+          Container(
+            width: 1,
+            height: 18,
+            color: Colors.white.withValues(alpha: 0.3),
+          ),
           // Send Files button
           GestureDetector(
             onTap: () => _pickAndSendFile(contact),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
               child: Text(
                 'Send Files',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 15,
-                  fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.95),
+                  fontSize: 13,
+                  fontFamilyFallback: const ['Segoe UI', 'Tahoma', 'Arial'],
                 ),
               ),
             ),
           ),
-          const SizedBox(width: 14),
+          // Vertical separator
+          Container(
+            width: 1,
+            height: 18,
+            color: Colors.white.withValues(alpha: 0.3),
+          ),
           // Invite contact button
           GestureDetector(
             onTap: () => _showInviteContactPicker(contact),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
               child: Text(
                 'Invite',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 15,
-                  fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.95),
+                  fontSize: 13,
+                  fontFamilyFallback: const ['Segoe UI', 'Tahoma', 'Arial'],
                 ),
               ),
             ),
@@ -1026,23 +1041,35 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
                   child: Stack(
                     alignment: Alignment.center,
                     children: [
-                      // Photo — inset ~15.5% to sit inside the aero frame center
+                      // Photo — inset ~10% to sit inside the aero frame center
                       Positioned(
-                        top: 10, left: 10, right: 10, bottom: 10,
+                        top: 7, left: 7, right: 7, bottom: 7,
                         child: ClipRRect(
                           borderRadius: BorderRadius.circular(3),
-                          child: _contactAvatar(contact, width: 48, height: 48),
+                          child: _contactAvatar(contact, width: 54, height: 54),
                         ),
                       ),
-                      // Aero glass frame, recolored by status
+                      // Aero glass frame — light tint preserving glass highlights
                       Positioned.fill(
                         child: ColorFiltered(
                           colorFilter: ColorFilter.mode(
-                            _statusFrame(contact.status).withValues(alpha: 0.85),
+                            _statusFrame(contact.status).withValues(alpha: 0.45),
                             BlendMode.srcATop,
                           ),
                           child: Image.asset(_assetAvatarFrame,
                               fit: BoxFit.fill),
+                        ),
+                      ),
+                      // Status glow edge
+                      Positioned.fill(
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: _statusFrame(contact.status).withValues(alpha: 0.7),
+                              width: 1.5,
+                            ),
+                          ),
                         ),
                       ),
                     ],
@@ -1130,22 +1157,34 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
               child: Stack(
                 alignment: Alignment.center,
                 children: [
-                  // Photo — inset ~15.5% to sit inside the aero frame center
+                  // Photo — inset ~10% to sit inside the aero frame center
                   Positioned(
-                    top: 8, left: 8, right: 8, bottom: 8,
+                    top: 5, left: 5, right: 5, bottom: 5,
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(3),
-                      child: _selfAvatar(selfAvatarPath, width: 36, height: 36),
+                      child: _selfAvatar(selfAvatarPath, width: 42, height: 42),
                     ),
                   ),
-                  // Aero glass frame, recolored by status
+                  // Aero glass frame — light tint preserving glass highlights
                   Positioned.fill(
                     child: ColorFiltered(
                       colorFilter: ColorFilter.mode(
-                        _statusFrame(selfStatus).withValues(alpha: 0.85),
+                        _statusFrame(selfStatus).withValues(alpha: 0.45),
                         BlendMode.srcATop,
                       ),
                       child: Image.asset(_assetAvatarFrame, fit: BoxFit.fill),
+                    ),
+                  ),
+                  // Status glow edge
+                  Positioned.fill(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                          color: _statusFrame(selfStatus).withValues(alpha: 0.7),
+                          width: 1.2,
+                        ),
+                      ),
                     ),
                   ),
                 ],

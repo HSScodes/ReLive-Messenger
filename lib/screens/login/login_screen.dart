@@ -245,8 +245,16 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                                   child: Stack(
                                     alignment: Alignment.center,
                                     children: [
-                                      Image.asset(_assetAvatarFrame),
-                                      Image.asset(_assetAvatarUser, width: 96, height: 96),
+                                      Positioned(
+                                        top: 14, left: 14, right: 14, bottom: 14,
+                                        child: ClipRRect(
+                                          borderRadius: BorderRadius.circular(4),
+                                          child: Image.asset(_assetAvatarUser, fit: BoxFit.cover),
+                                        ),
+                                      ),
+                                      Positioned.fill(
+                                        child: Image.asset(_assetAvatarFrame, fit: BoxFit.fill),
+                                      ),
                                     ],
                                   ),
                                 ),

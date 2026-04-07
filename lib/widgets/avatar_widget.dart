@@ -32,11 +32,11 @@ class AvatarWidget extends StatelessWidget {
       width: size,
       height: size,
       child: Stack(clipBehavior: Clip.none, children: [
-        // Photo / placeholder layer – inset ~15.5% so the photo sits
-        // inside the frame's transparent center (original ratio 96/139).
+        // Photo / placeholder layer – inset ~10% to sit inside the frame's
+        // transparent center (matches new frame border of ~10%).
         Positioned(
-          top: size * 0.155, left: size * 0.155,
-          right: size * 0.155, bottom: size * 0.155,
+          top: size * 0.10, left: size * 0.10,
+          right: size * 0.10, bottom: size * 0.10,
           child: Opacity(
             opacity: online ? 1.0 : 0.45,
             child: ClipRRect(
@@ -45,16 +45,30 @@ class AvatarWidget extends StatelessWidget {
             ),
           ),
         ),
-        // Aero glass frame, recolored by status
+        // Aero glass frame — light tint preserving glass highlights
         Positioned.fill(
-          child: ColorFiltered(
-            colorFilter: ColorFilter.mode(
-              tint.withValues(alpha: 0.85),
-              BlendMode.srcATop,
-            ),
-            child: Opacity(
-              opacity: online ? 1.0 : 0.7,
+          child: Opacity(
+            opacity: online ? 1.0 : 0.6,
+            child: ColorFiltered(
+              colorFilter: ColorFilter.mode(
+                tint.withValues(alpha: 0.45),
+                BlendMode.srcATop,
+              ),
               child: Image.asset(_assetFrame, fit: BoxFit.fill),
+            ),
+          ),
+        ),
+        // Status glow edge (thin colored border matching WLM 2009 look)
+        Positioned.fill(
+          child: IgnorePointer(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(size * 0.12),
+                border: Border.all(
+                  color: tint.withValues(alpha: online ? 0.7 : 0.3),
+                  width: size * 0.02,
+                ),
+              ),
             ),
           ),
         ),
