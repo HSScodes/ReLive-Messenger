@@ -16,10 +16,6 @@ reLive brings the familiar Messenger experience to Android — with original ass
   <img src="screenshots/display-picture.jpg" width="220" alt="Change Display Picture" />
 </p>
 
-<p align="center">
-  <img src="screenshots/notifications.jpg" width="500" alt="Notifications" />
-</p>
-
 ---
 
 ## Features
