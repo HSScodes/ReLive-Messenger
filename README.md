@@ -2,21 +2,22 @@
 
 An independent Android messaging client with **Messenger-inspired UX**, built for **legacy chat protocol interoperability**.
 
-reLive brings the familiar Windows Live Messenger 2009 experience to Android — with original assets, original branding, and full compatibility with legacy MSNP-based messaging networks.
+reLive brings the familiar Messenger experience to Android — with original assets, original branding, and full compatibility with legacy MSNP-based messaging networks.
 
 ---
 
 ## Screenshots
 
 <p align="center">
-  <img src="screenshots/contact-list.jpg" width="260" alt="Contact List" />
+  <img src="screenshots/contact-list.jpg" width="220" alt="Contact List" />
   &nbsp;&nbsp;
-  <img src="screenshots/chat-window.jpg" width="260" alt="Chat Window" />
+  <img src="screenshots/chat-window.jpg" width="220" alt="Chat Window" />
+  &nbsp;&nbsp;
+  <img src="screenshots/display-picture.jpg" width="220" alt="Change Display Picture" />
 </p>
+
 <p align="center">
-  <img src="screenshots/display-picture.jpg" width="260" alt="Change Display Picture" />
-  &nbsp;&nbsp;
-  <img src="screenshots/notifications.jpg" width="400" alt="Notifications" />
+  <img src="screenshots/notifications.jpg" width="500" alt="Notifications" />
 </p>
 
 ---
@@ -58,7 +59,7 @@ This is an **unofficial, independent project**.
 
 - Not affiliated with, endorsed by, or sponsored by Microsoft Corporation.
 - Not affiliated with or endorsed by Crosstalk.
-- All branding, assets, and code in this project are original work.
+- All branding, assets, and code in this project are recreations inspired by the WLM era.
 - Compatible with legacy Windows Live Messenger–era clients and protocols where supported.
 - "Windows Live Messenger" is a trademark of Microsoft Corporation.
 
