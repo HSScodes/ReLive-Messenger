@@ -2,7 +2,7 @@
 
 An independent Android messaging client with **Messenger-inspired UX**, built for **legacy chat protocol interoperability**.
 
-reLive brings the familiar Messenger experience to Android — with original assets, original branding, and full compatibility with legacy MSNP-based messaging networks.
+reLive brings the familiar Messenger experience to Android — with original assets and full compatibility with legacy MSNP-based messaging networks.
 
 ---
 
