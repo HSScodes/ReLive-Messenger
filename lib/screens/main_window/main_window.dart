@@ -1,4 +1,4 @@
-import 'dart:io';
+﻿import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
@@ -6,18 +6,27 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:wlm_project/l10n/app_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../models/contact.dart';
+import '../../models/group_conversation.dart';
+import '../../network/msnp_client.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../../providers/contacts_provider.dart';
 import '../../providers/connection_provider.dart';
+import '../../providers/group_conversations_provider.dart';
 import '../../providers/profile_avatar_provider.dart';
 import '../../utils/presence_status.dart';
 import '../../utils/wlm_color_tags.dart';
 import '../chat/chat_window.dart';
+import '../chat/group_chat_window.dart';
+import '../login/connecting_screen.dart';
 import '../login/login_screen.dart';
+import '../about/about_screen.dart';
+import '../../services/update_service.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 /* ═══════════════════════════════════════════════════════════════════════════
    MainWindowScreen — WLM 2009 Contact-list, redesigned for phone / touch
@@ -33,27 +42,22 @@ class MainWindowScreen extends ConsumerStatefulWidget {
 class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
   // ── Asset paths ────────────────────────────────────────────────────────
   static const _assetAvatarFrame =
-      'assets/images/extracted/msgsres/carved_png_9812096.png';
+      'assets/images/app/ui/carved_png_9812096.png';
   static const _assetAvatarUser = 'assets/images/usertiles/new_default.png';
-  static const _assetArrow =
-      'assets/images/extracted/msgsres/carved_png_10968848.png';
+  static const _assetArrow = 'assets/images/app/ui/carved_png_10968848.png';
 
-  static const _assetToolbarC =
-      'assets/images/extracted/msgsres/carved_png_9835392.png';
+  static const _assetToolbarC = 'assets/images/app/ui/carved_png_9835392.png';
   static const _assetGroupArrow =
-      'assets/images/extracted/msgsres/carved_png_10808928.png';
+      'assets/images/app/ui/carved_png_10808928.png';
   static const _assetStatusOnline =
-      'assets/images/extracted/msgsres/carved_png_9375216.png';
-  static const _assetStatusBusy =
-      'assets/images/extracted/msgsres/carved_png_9387680.png';
-  static const _assetStatusAway =
-      'assets/images/extracted/msgsres/carved_png_9380960.png';
+      'assets/images/app/ui/carved_png_9375216.png';
+  static const _assetStatusBusy = 'assets/images/app/ui/carved_png_9387680.png';
+  static const _assetStatusAway = 'assets/images/app/ui/carved_png_9380960.png';
   static const _assetStatusOffline =
-      'assets/images/extracted/msgsres/carved_png_9394296.png';
+      'assets/images/app/ui/carved_png_9394296.png';
   static const _assetAddContact =
-      'assets/images/extracted/msgsres/carved_png_11071608.png';
-  static const _assetBuddyGreen =
-      'assets/images/extracted/msgsres/carved_png_9375216.png';
+      'assets/images/app/ui/carved_png_11071608.png';
+  static const _assetBuddyGreen = 'assets/images/app/ui/carved_png_9375216.png';
 
   // ── State ──────────────────────────────────────────────────────────────
   String _searchQuery = '';
@@ -65,12 +69,57 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
   bool _grpExpanded = false;
   bool _onExpanded = true;
   bool _offExpanded = true;
+  bool _activeConvExpanded = true;
+  bool _showingReconnect = false;
+  bool _updateChecked = false;
 
   @override
   void dispose() {
     _searchCtrl.dispose();
     _psmCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _checkForUpdate() async {
+    final result = await UpdateService.checkForUpdate();
+    if (!result.updateAvailable || !mounted) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1B3E5F),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Text(
+          'Update Available',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
+        content: Text(
+          "You're running an outdated version of reLive "
+          '(v${result.currentVersion}).\n\n'
+          'A newer version (${result.latestVersion}) is available. '
+          'Please update the app.',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Later', style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF4A90D9),
+            ),
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              launchUrl(
+                Uri.parse(UpdateService.releasesUrl),
+                mode: LaunchMode.externalApplication,
+              );
+            },
+            child: const Text('Update'),
+          ),
+        ],
+      ),
+    );
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────
@@ -249,24 +298,24 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
           ],
         ),
       ),
-      // Change scene
-      PopupMenuItem<String>(
-        value: 'change_scene',
-        height: 30,
-        child: Row(
-          children: [
-            const SizedBox(width: 24),
-            Text(
-              l10n.changeScene,
-              style: const TextStyle(
-                fontSize: 14,
-                color: Color(0xFF1B2A38),
-                fontFamilyFallback: ['Segoe UI', 'Tahoma'],
-              ),
-            ),
-          ],
-        ),
-      ),
+      // Change scene — commented out for alpha
+      // PopupMenuItem<String>(
+      //   value: 'change_scene',
+      //   height: 30,
+      //   child: Row(
+      //     children: [
+      //       const SizedBox(width: 24),
+      //       Text(
+      //         l10n.changeScene,
+      //         style: const TextStyle(
+      //           fontSize: 14,
+      //           color: Color(0xFF1B2A38),
+      //           fontFamilyFallback: ['Segoe UI', 'Tahoma'],
+      //         ),
+      //       ),
+      //     ],
+      //   ),
+      // ),
       // Change display name
       PopupMenuItem<String>(
         value: 'change_name',
@@ -277,6 +326,24 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
             Text(
               l10n.changeDisplayName,
               style: const TextStyle(
+                fontSize: 14,
+                color: Color(0xFF1B2A38),
+                fontFamilyFallback: ['Segoe UI', 'Tahoma'],
+              ),
+            ),
+          ],
+        ),
+      ),
+      // About
+      PopupMenuItem<String>(
+        value: 'about',
+        height: 30,
+        child: Row(
+          children: [
+            const SizedBox(width: 24),
+            const Text(
+              'About',
+              style: TextStyle(
                 fontSize: 14,
                 color: Color(0xFF1B2A38),
                 fontFamilyFallback: ['Segoe UI', 'Tahoma'],
@@ -304,6 +371,13 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
     ).then((value) {
       if (value == null || !mounted) return;
       if (value == 'signout') {
+        // Clear auto-sign-in so the login screen doesn't auto-relogin.
+        SharedPreferences.getInstance().then((p) {
+          p.setBool('wlm_auto_sign_in', false);
+        });
+        // Properly disconnect + clear cached credentials.
+        ref.read(authProvider.notifier).signOut();
+        if (!mounted) return;
         Navigator.of(context).pushAndRemoveUntil(
           MaterialPageRoute(builder: (_) => const LoginScreen()),
           (_) => false,
@@ -314,12 +388,18 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
         _showDisplayPicturePicker();
         return;
       }
-      if (value == 'change_scene') {
-        _showScenePicker();
-        return;
-      }
+      // if (value == 'change_scene') {
+      //   _showScenePicker();
+      //   return;
+      // }
       if (value == 'change_name') {
         _showChangeDisplayNameDialog();
+        return;
+      }
+      if (value == 'about') {
+        Navigator.of(
+          context,
+        ).push(MaterialPageRoute(builder: (_) => const AboutScreen()));
         return;
       }
       // Status change
@@ -351,6 +431,38 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
     final auth = ref.watch(authProvider);
+
+    // Watch connection state — navigate to reconnect screen on disconnect.
+    ref.listen(connectionProvider, (prev, next) {
+      next.whenData((status) {
+        if ((status == ConnectionStatus.disconnected ||
+                status == ConnectionStatus.error) &&
+            !_showingReconnect &&
+            auth.isAuthenticated) {
+          _showingReconnect = true;
+          Navigator.of(context)
+              .push(
+                MaterialPageRoute(
+                  builder: (_) =>
+                      const ConnectingScreen(statusText: 'Reconnecting...'),
+                ),
+              )
+              .then((_) => _showingReconnect = false);
+        } else if (status == ConnectionStatus.connected && _showingReconnect) {
+          _showingReconnect = false;
+          if (Navigator.of(context).canPop()) {
+            Navigator.of(context).pop();
+          }
+        }
+      });
+    });
+
+    // One-shot update check on first build.
+    if (!_updateChecked) {
+      _updateChecked = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _checkForUpdate());
+    }
+
     ref.watch(chatProvider);
     final contacts = ref.watch(contactsProvider);
     final selfAvatarPath = ref.watch(profileAvatarProvider);
@@ -498,6 +610,30 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
                                   setState(() => _grpExpanded = !_grpExpanded),
                               [],
                             ),
+                            // ── Active group conversations ─────────────
+                            Consumer(
+                              builder: (ctx, cRef, _) {
+                                final groups = cRef.watch(
+                                  groupConversationsProvider,
+                                );
+                                if (groups.isEmpty) {
+                                  return const SizedBox.shrink();
+                                }
+                                return _group(
+                                  'Active Conversations',
+                                  groups.length,
+                                  _activeConvExpanded,
+                                  () => setState(
+                                    () => _activeConvExpanded =
+                                        !_activeConvExpanded,
+                                  ),
+                                  [
+                                    for (final g in groups)
+                                      _groupConversationTile(g),
+                                  ],
+                                );
+                              },
+                            ),
                             _group(
                               l10n.contactsAvailable,
                               fOn.length,
@@ -567,7 +703,7 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
       child: Row(
         children: [
           Image.asset(
-            'assets/images/extracted/app_logo_24.png',
+            'assets/images/app/app_logo_24.png',
             width: 20,
             height: 20,
             filterQuality: FilterQuality.medium,
@@ -1490,6 +1626,109 @@ class _MainWindowScreenState extends ConsumerState<MainWindowScreen> {
             child: const Text('Remove'),
           ),
         ],
+      ),
+    );
+  }
+
+  // ═════════════════════════════════════════════════════════════════════════
+  //  GROUP CONVERSATION TILE
+  // ═════════════════════════════════════════════════════════════════════════
+  Widget _groupConversationTile(GroupConversation group) {
+    final contacts = ref.watch(contactsProvider);
+    // Resolve display names for each participant
+    final names = group.participants.map((email) {
+      for (final c in contacts) {
+        if (c.email.toLowerCase() == email.toLowerCase()) {
+          return stripWlmColorTags(c.displayName);
+        }
+      }
+      return email;
+    }).toList();
+
+    final label = names.join(', ');
+    final hasUnread = group.unreadCount > 0;
+
+    return InkWell(
+      onTap: () {
+        ref.read(groupConversationsProvider.notifier).clearUnread(group.id);
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => GroupChatWindowScreen(group: group),
+          ),
+        );
+      },
+      highlightColor: const Color(0xFFD0E8F5),
+      splashColor: const Color(0x30538DBF),
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Colors.white.withOpacity(0.22),
+              Colors.white.withOpacity(0.08),
+            ],
+          ),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: hasUnread
+                ? const Color(0xFF3B9AD9).withOpacity(0.4)
+                : Colors.white.withOpacity(0.15),
+            width: 0.5,
+          ),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.group_rounded, size: 28, color: Color(0xFF4A7A9C)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: const Color(0xFF0A3A7D),
+                      fontWeight: hasUnread
+                          ? FontWeight.w700
+                          : FontWeight.normal,
+                      fontFamilyFallback: const ['Segoe UI', 'Tahoma', 'Arial'],
+                    ),
+                  ),
+                  Text(
+                    '${group.participants.length} participants',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF6D8DA4),
+                      fontFamilyFallback: ['Segoe UI', 'Tahoma'],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (hasUnread)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF3B9AD9),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  '${group.unreadCount}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }

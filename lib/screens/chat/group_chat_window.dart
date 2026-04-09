@@ -3,7 +3,6 @@ import 'dart:math';
 import 'dart:io';
 import 'dart:ui' as ui;
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:wlm_project/l10n/app_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,30 +10,34 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../models/contact.dart';
 import '../../models/message.dart';
 import '../../models/group_conversation.dart';
+import '../../network/msnp_client.dart';
+import '../../network/msnp_parser.dart';
 import '../../providers/chat_provider.dart';
 import '../../providers/contacts_provider.dart';
 import '../../providers/connection_provider.dart';
-import '../../providers/p2p_provider.dart';
-import '../../services/p2p_session_manager.dart';
+import '../../providers/group_conversations_provider.dart';
 import '../../providers/profile_avatar_provider.dart';
 import '../../utils/presence_status.dart';
 import '../../utils/wlm_color_tags.dart';
 import '../../widgets/win7_back_button.dart';
-import '../../widgets/wlm_scene_background.dart';
 import '../../widgets/emoticon_text.dart';
 import '../../widgets/emoticon_picker.dart';
-import '../../widgets/avatar_widget.dart';
+import 'chat_window.dart';
 
-class ChatWindowScreen extends ConsumerStatefulWidget {
-  const ChatWindowScreen({super.key, required this.contact});
+/// Dedicated group chat window. Displays a multi-participant header with
+/// aero-framed avatars for every participant, a Leave button, and a clean
+/// thread that only shows messages for this group conversation.
+class GroupChatWindowScreen extends ConsumerStatefulWidget {
+  const GroupChatWindowScreen({super.key, required this.group});
 
-  final Contact contact;
+  final GroupConversation group;
 
   @override
-  ConsumerState<ChatWindowScreen> createState() => _ChatWindowScreenState();
+  ConsumerState<GroupChatWindowScreen> createState() =>
+      _GroupChatWindowScreenState();
 }
 
-class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
+class _GroupChatWindowScreenState extends ConsumerState<GroupChatWindowScreen>
     with SingleTickerProviderStateMixin {
   final TextEditingController _controller = TextEditingController();
   final ScrollController _messagesScrollController = ScrollController();
@@ -51,18 +54,12 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
       'assets/images/app/ui/carved_png_9812096.png';
   static const String _assetAvatarUser =
       'assets/images/usertiles/new_default.png';
-  static const String _assetWlmIcon =
-      'assets/images/app/ui/carved_png_9835392.png';
   static const String _assetNudgeIcon =
       'assets/images/app/ui/carved_png_9432408.png';
 
-  static const String _assetChromeBar =
-      'assets/images/app/ui/carved_png_427616.png';
-  static const String _assetChromeBarLight =
-      'assets/images/app/ui/carved_png_433248.png';
+  StreamSubscription<MsnpEvent>? _eventSub;
 
   Widget _contactAvatar(Contact contact, {double? width, double? height}) {
-    // Prefer DDP (dynamic display picture / animated GIF) over static avatar.
     final path = contact.ddpLocalPath ?? contact.avatarLocalPath;
     if (path != null && path.isNotEmpty) {
       final file = File(path);
@@ -81,37 +78,12 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
         );
       }
     }
-
     return Image.asset(
       _assetAvatarUser,
       width: width,
       height: height,
       fit: BoxFit.cover,
     );
-  }
-
-  Contact _currentContact() {
-    final contacts = ref.watch(contactsProvider);
-    for (final c in contacts) {
-      if (c.email.toLowerCase() == widget.contact.email.toLowerCase()) {
-        return c;
-      }
-    }
-    return widget.contact;
-  }
-
-  String _statusLabel(BuildContext context, PresenceStatus status) {
-    final l10n = AppLocalizations.of(context)!;
-    switch (status) {
-      case PresenceStatus.online:
-        return l10n.statusOnline;
-      case PresenceStatus.busy:
-        return l10n.statusBusy;
-      case PresenceStatus.away:
-        return l10n.statusAway;
-      case PresenceStatus.appearOffline:
-        return l10n.statusOffline;
-    }
   }
 
   Color _statusFrame(PresenceStatus status) {
@@ -127,26 +99,23 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
     }
   }
 
-  Color _contactThemeBase(Contact contact) {
-    final cs = contact.colorScheme;
-    if (cs != null && cs.isNotEmpty && cs != '-1') {
-      final parsed = int.tryParse(cs);
-      if (parsed != null && parsed != 0) {
-        final rgb = parsed < 0 ? (0xFFFFFF + parsed + 1) : parsed;
-        return Color(0xFF000000 | (rgb & 0xFFFFFF));
-      }
+  /// Resolve a Contact from the contacts list by email.
+  Contact? _resolveContact(String email) {
+    final contacts = ref.read(contactsProvider);
+    for (final c in contacts) {
+      if (c.email.toLowerCase() == email.toLowerCase()) return c;
     }
-    return const Color(0xFF2C79B4);
+    return null;
   }
 
-  Color _lighten(Color color, double delta) {
-    final hsl = HSLColor.fromColor(color);
-    return hsl.withLightness((hsl.lightness + delta).clamp(0.0, 1.0)).toColor();
-  }
-
-  Color _darken(Color color, double delta) {
-    final hsl = HSLColor.fromColor(color);
-    return hsl.withLightness((hsl.lightness - delta).clamp(0.0, 1.0)).toColor();
+  /// Resolve display name for an email.
+  String _resolveDisplayName(String email) {
+    final c = _resolveContact(email);
+    if (c != null) {
+      final n = stripWlmColorTags(c.displayName);
+      if (n.isNotEmpty && n != c.email) return n;
+    }
+    return email;
   }
 
   @override
@@ -160,30 +129,43 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
       begin: 0,
       end: 1,
     ).animate(CurvedAnimation(parent: _shakeController, curve: Curves.linear));
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      // Only trigger a P2P fetch if the contact doesn't already have a
-      // cached avatar.  Using force:true on every chat open causes a new
-      // SB + INVITE cycle that, on timeout, wipes the existing avatar.
-      final hasAvatar =
-          widget.contact.avatarLocalPath != null &&
-          widget.contact.avatarLocalPath!.isNotEmpty;
-      if (!hasAvatar) {
-        ref
-            .read(msnpClientProvider)
-            .requestAvatarFetchForContact(widget.contact.email, force: true);
-      }
-      // Refresh cached avatar (CrossTalk / persistent cache) for this contact.
-      ref
-          .read(contactsProvider.notifier)
-          .refreshAvatarFor(widget.contact.email);
-    });
+
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _scrollMessagesToBottom(),
     );
+
+    // Listen for SBLEAVE events — when group drops to 1 remote participant,
+    // auto-revert to that contact's 1:1 chat window.
+    final client = ref.read(msnpClientProvider);
+    _eventSub = client.events.listen((event) {
+      if (!mounted) return;
+      if (event.type == MsnpEventType.system && event.command == 'SBLEAVE') {
+        _checkAutoRevert();
+      }
+    });
+  }
+
+  void _checkAutoRevert() {
+    final client = ref.read(msnpClientProvider);
+    final participants = client.sbParticipants;
+    // If there's only 1 remote participant left, the group has ended.
+    if (participants.length <= 1 && participants.isNotEmpty) {
+      final remainingEmail = participants.first;
+      final contact = _resolveContact(remainingEmail);
+      if (contact != null && mounted) {
+        // Remove the group conversation entry.
+        ref.read(groupConversationsProvider.notifier).remove(widget.group.id);
+        // Replace this group window with the 1:1 chat window.
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => ChatWindowScreen(contact: contact)),
+        );
+      }
+    }
   }
 
   @override
   void dispose() {
+    _eventSub?.cancel();
     _emoticonOverlay?.remove();
     _typingDebounce?.cancel();
     _shakeController.dispose();
@@ -192,449 +174,78 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
     super.dispose();
   }
 
-  /// Build the message thread for this chat window.  If the current
-  /// switchboard session is a group that includes the chat contact, merge
-  /// the 1:1 and group threads so messages don't disappear when a third
-  /// person joins.
-  List<Message> _buildThread(String contactEmail) {
+  List<Message> _buildThread() {
     final chatNotifier = ref.read(chatProvider.notifier);
-    final oneToOne = chatNotifier.threadForContact(contactEmail);
-    final client = ref.read(msnpClientProvider);
-    if (!client.isGroupSession) return oneToOne;
-    final participants = client.sbParticipants;
-    if (!participants.contains(contactEmail.toLowerCase())) return oneToOne;
-    final groupId = GroupConversation.buildId(participants);
-    final groupMsgs = chatNotifier.threadForGroup(groupId);
-    if (groupMsgs.isEmpty) return oneToOne;
-    final merged = [...oneToOne, ...groupMsgs];
-    merged.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-    return merged;
+    return chatNotifier.threadForGroup(widget.group.id);
   }
 
-  bool _isIncoming(Message message, String contactEmail) {
-    // In a group chat, any message not from us is incoming.
+  bool _isIncoming(Message message) {
     final selfEmail = ref.read(msnpClientProvider).selfEmail.toLowerCase();
     if (selfEmail.isNotEmpty) {
       return message.from.toLowerCase() != selfEmail;
     }
-    return message.from.toLowerCase() == contactEmail.toLowerCase();
+    return true;
   }
 
   void _scrollMessagesToBottom() {
-    if (!_messagesScrollController.hasClients) {
-      return;
-    }
+    if (!_messagesScrollController.hasClients) return;
     _messagesScrollController.jumpTo(
       _messagesScrollController.position.maxScrollExtent,
     );
   }
 
-  Future<void> _sendMessage(Contact contact) async {
+  Future<void> _sendMessage() async {
     final body = _controller.text.trim();
-    if (body.isEmpty) {
-      return;
-    }
-
+    if (body.isEmpty) return;
+    // Send to any participant in the group; the SB session will broadcast.
+    final targetEmail = widget.group.participants.first;
     await ref
         .read(chatProvider.notifier)
-        .sendMessage(to: contact.email, body: body);
-    if (!mounted) {
-      return;
-    }
+        .sendMessage(
+          to: targetEmail,
+          body: body,
+          conversationId: widget.group.id,
+        );
+    if (!mounted) return;
     _controller.clear();
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _scrollMessagesToBottom(),
     );
   }
 
-  void _sendTypingPulse(Contact contact) {
+  void _sendTypingPulse() {
     _typingDebounce?.cancel();
     _typingDebounce = Timer(const Duration(milliseconds: 450), () {
-      ref.read(chatProvider.notifier).sendTyping(contact.email);
+      final targetEmail = widget.group.participants.first;
+      ref.read(chatProvider.notifier).sendTyping(targetEmail);
     });
   }
 
-  Future<void> _sendNudge(Contact contact) async {
+  Future<void> _sendNudge() async {
     if (_nudgeCooldown) return;
     _nudgeCooldown = true;
-    await ref.read(chatProvider.notifier).sendNudge(contact.email);
-    if (!mounted) {
-      return;
-    }
+    final targetEmail = widget.group.participants.first;
+    await ref.read(chatProvider.notifier).sendNudge(targetEmail);
+    if (!mounted) return;
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _scrollMessagesToBottom(),
     );
-    // 4-second cooldown to match original WLM behaviour.
     Future.delayed(const Duration(seconds: 4), () {
       if (mounted) _nudgeCooldown = false;
     });
   }
 
-  Future<void> _pickAndSendFile(Contact contact) async {
-    final result = await FilePicker.platform.pickFiles();
-    if (result == null || result.files.isEmpty) return;
-    final file = result.files.first;
-    if (file.path == null) return;
-    await ref
-        .read(chatProvider.notifier)
-        .sendFile(to: contact.email, filePath: file.path!);
-    if (mounted) {
-      WidgetsBinding.instance.addPostFrameCallback(
-        (_) => _scrollMessagesToBottom(),
-      );
-    }
-  }
-
-  void _showInviteContactPicker(Contact currentContact) {
-    final contacts = ref.read(contactsProvider);
-    final online = contacts
-        .where(
-          (c) =>
-              c.status != PresenceStatus.appearOffline &&
-              c.email.toLowerCase() != currentContact.email.toLowerCase(),
-        )
-        .toList();
-
-    if (online.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No other contacts online to invite.')),
-      );
-      return;
-    }
-
-    showDialog(
-      context: context,
-      builder: (ctx) {
-        return Dialog(
-          backgroundColor: const Color(0xFFF4F8FB),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
-            side: BorderSide(color: Colors.white.withOpacity(0.6)),
-          ),
-          child: SizedBox(
-            width: 280,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
-                  ),
-                  decoration: const BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        Color(0xFF1A4978),
-                        Color(0xFF3A8CC4),
-                        Color(0xFF5CAEE0),
-                        Color(0xFF2F7CB5),
-                      ],
-                      stops: [0.0, 0.40, 0.55, 1.0],
-                    ),
-                    borderRadius: BorderRadius.only(
-                      topLeft: Radius.circular(14),
-                      topRight: Radius.circular(14),
-                    ),
-                  ),
-                  child: const Text(
-                    'Invite Contact',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      fontFamilyFallback: ['Segoe UI', 'Tahoma'],
-                    ),
-                  ),
-                ),
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 300),
-                  child: ListView.builder(
-                    shrinkWrap: true,
-                    itemCount: online.length,
-                    itemBuilder: (_, i) {
-                      final c = online[i];
-                      return ListTile(
-                        dense: true,
-                        leading: AvatarWidget(
-                          status: c.status,
-                          imagePath: c.ddpLocalPath ?? c.avatarLocalPath,
-                          size: 32,
-                        ),
-                        title: Text(
-                          stripWlmColorTags(c.displayName),
-                          style: const TextStyle(
-                            fontSize: 13,
-                            fontFamilyFallback: ['Segoe UI', 'Tahoma'],
-                          ),
-                        ),
-                        subtitle: Text(
-                          c.email,
-                          style: const TextStyle(fontSize: 11),
-                        ),
-                        onTap: () {
-                          Navigator.pop(ctx);
-                          // CAL the contact into the existing switchboard
-                          ref
-                              .read(msnpClientProvider)
-                              .inviteToSwitchboard(c.email);
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                'Invited ${stripWlmColorTags(c.displayName)} to the conversation',
-                              ),
-                              duration: const Duration(seconds: 2),
-                            ),
-                          );
-                        },
-                      );
-                    },
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.all(8),
-                  child: Align(
-                    alignment: Alignment.centerRight,
-                    child: TextButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      child: const Text(
-                        'Cancel',
-                        style: TextStyle(color: Color(0xFF4A6A84)),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _fileTransferBubble(Message message, bool incoming, Contact contact) {
-    final state = message.fileTransferState;
-    final fileName = message.fileName ?? 'file';
-    final size = message.fileSize ?? 0;
-    final sizeStr = _formatFileSize(size);
-    final l10n = AppLocalizations.of(context)!;
-
-    // Resolve sender name for "sends:" header
-    final String senderLabel;
-    if (incoming) {
-      final rawName = stripWlmColorTags(contact.displayName);
-      senderLabel = (rawName.isNotEmpty && rawName != contact.email)
-          ? rawName
-          : contact.email;
-    } else {
-      senderLabel = ref.read(msnpClientProvider).selfDisplayName;
-    }
-
-    return Column(
-      crossAxisAlignment: incoming
-          ? CrossAxisAlignment.start
-          : CrossAxisAlignment.end,
-      children: [
-        Padding(
-          padding: const EdgeInsets.only(bottom: 2),
-          child: Text(
-            l10n.messageSends(senderLabel),
-            style: TextStyle(
-              color: incoming
-                  ? const Color(0xFF2A6A9E)
-                  : const Color(0xFF2A7A3A),
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              fontFamilyFallback: const ['Segoe UI', 'Tahoma', 'Arial'],
-            ),
-          ),
-        ),
-        Align(
-          alignment: incoming ? Alignment.centerLeft : Alignment.centerRight,
-          child: Container(
-            margin: const EdgeInsets.only(bottom: 8),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            constraints: const BoxConstraints(maxWidth: 320),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: incoming
-                    ? [
-                        Colors.white.withOpacity(0.60),
-                        const Color(0xFFE8F0F8).withOpacity(0.65),
-                      ]
-                    : [
-                        Colors.white.withOpacity(0.60),
-                        const Color(0xFFE4F0E8).withOpacity(0.65),
-                      ],
-              ),
-              border: Border.all(
-                color: const Color(0xFFCBDAE8).withOpacity(0.50),
-              ),
-              borderRadius: BorderRadius.circular(10),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFF1A4978).withOpacity(0.05),
-                  blurRadius: 6,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Header
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.insert_drive_file_outlined,
-                      size: 20,
-                      color: Color(0xFF3A8AC0),
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        fileName,
-                        style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF2A3E50),
-                          fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  sizeStr,
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: Color(0xFF6A8FA8),
-                    fontFamilyFallback: ['Segoe UI', 'Tahoma'],
-                  ),
-                ),
-                const SizedBox(height: 6),
-                // Status / actions
-                if (state == FileTransferState.offered && incoming)
-                  Row(
-                    children: [
-                      _ftActionBtn('Accept', const Color(0xFF3A9A4A), () {
-                        ref
-                            .read(chatProvider.notifier)
-                            .acceptFileTransfer(message.fileTransferId ?? '');
-                      }),
-                      const SizedBox(width: 8),
-                      _ftActionBtn('Decline', const Color(0xFFA04040), () {
-                        ref
-                            .read(chatProvider.notifier)
-                            .declineFileTransfer(message.fileTransferId ?? '');
-                      }),
-                    ],
-                  )
-                else
-                  Text(
-                    _ftStateLabel(state, incoming),
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontStyle: FontStyle.italic,
-                      color: state == FileTransferState.completed
-                          ? const Color(0xFF3A9A4A)
-                          : state == FileTransferState.failed ||
-                                state == FileTransferState.declined
-                          ? const Color(0xFFA04040)
-                          : const Color(0xFF5A8AAC),
-                      fontFamilyFallback: const ['Segoe UI', 'Tahoma'],
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ), // close Align
-      ], // close Column children
-    ); // close Column
-  }
-
-  Widget _ftActionBtn(String label, Color color, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [color.withOpacity(0.85), color],
-          ),
-          borderRadius: BorderRadius.circular(6),
-          boxShadow: [
-            BoxShadow(
-              color: color.withOpacity(0.25),
-              blurRadius: 4,
-              offset: const Offset(0, 1),
-            ),
-          ],
-        ),
-        child: Text(
-          label,
-          style: const TextStyle(
-            fontSize: 12,
-            color: Colors.white,
-            fontWeight: FontWeight.w600,
-            fontFamilyFallback: ['Segoe UI', 'Tahoma'],
-          ),
-        ),
-      ),
-    );
-  }
-
-  String _ftStateLabel(FileTransferState state, bool incoming) {
-    switch (state) {
-      case FileTransferState.none:
-        return '';
-      case FileTransferState.offered:
-        return incoming
-            ? 'Waiting for your response...'
-            : 'Waiting for response...';
-      case FileTransferState.accepted:
-        return 'Transfer accepted — starting...';
-      case FileTransferState.transferring:
-        return 'Transferring...';
-      case FileTransferState.completed:
-        return 'Transfer complete';
-      case FileTransferState.declined:
-        return 'Transfer declined';
-      case FileTransferState.failed:
-        return 'Transfer failed';
-    }
-  }
-
-  String _formatFileSize(int bytes) {
-    if (bytes < 1024) return '$bytes B';
-    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
-  }
-
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
-    final contact = _currentContact();
     ref.watch(chatProvider);
     final selfAvatarPath = ref.watch(profileAvatarProvider);
-    final typingContacts = ref.watch(typingContactsProvider);
-    final isContactTyping = typingContacts.contains(
-      contact.email.toLowerCase(),
-    );
-    final thread = _buildThread(contact.email);
+    final thread = _buildThread();
+
     if (thread.length != _lastThreadSize) {
-      // Check if the newest message is an incoming nudge → trigger shake
       if (thread.length > _lastThreadSize && thread.isNotEmpty) {
         final newest = thread.last;
-        if (newest.isNudge &&
-            newest.from.toLowerCase() == contact.email.toLowerCase()) {
+        if (newest.isNudge && _isIncoming(newest)) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (mounted) _shakeController.forward(from: 0);
           });
@@ -645,6 +256,17 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
         (_) => _scrollMessagesToBottom(),
       );
     }
+
+    // Resolve current participants from the live SB session if available,
+    // fall back to the group model's participant list.
+    final client = ref.watch(msnpClientProvider);
+    final liveParticipants = client.isGroupSession
+        ? client.sbParticipants
+        : widget.group.participants;
+
+    // Build the display label
+    final names = liveParticipants.map((e) => _resolveDisplayName(e)).toList();
+    final label = names.join(', ');
 
     return AnimatedBuilder(
       animation: _shakeAnimation,
@@ -673,23 +295,9 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
           child: SafeArea(
             child: Column(
               children: [
-                _titleBar(contact),
+                _titleBar(label),
                 _menuBar(),
-                _contactHeader(contact),
-                // P2P status bar – dev only, commented out for alpha
-                // Consumer(
-                //   builder: (ctx, cRef, _) {
-                //     final statusMap =
-                //         cRef.watch(p2pStatusProvider).asData?.value ?? {};
-                //     final p2pSt = statusMap[contact.email.toLowerCase()];
-                //     if (p2pSt == null ||
-                //         p2pSt.message.isEmpty ||
-                //         p2pSt.message == 'Avatar: idle') {
-                //       return const SizedBox.shrink();
-                //     }
-                //     return _p2pStatusBar(p2pSt);
-                //   },
-                // ),
+                _groupContactHeader(liveParticipants),
                 Expanded(
                   child: Container(
                     margin: const EdgeInsets.fromLTRB(8, 4, 8, 0),
@@ -790,65 +398,17 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
                                         );
                                       }
 
-                                      final incoming = _isIncoming(
-                                        message,
-                                        contact.email,
-                                      );
-
-                                      // File transfer messages get a special widget
-                                      if (message.isFileTransfer) {
-                                        return _fileTransferBubble(
-                                          message,
-                                          incoming,
-                                          contact,
-                                        );
-                                      }
-
-                                      // WLM 2009 flat format:
-                                      // Show sender header only when sender changes
+                                      final incoming = _isIncoming(message);
                                       final showHeader =
                                           index == 0 ||
                                           thread[index - 1].from !=
-                                              message.from ||
-                                          thread[index - 1].isFileTransfer;
+                                              message.from;
 
-                                      final rawDisplayName = stripWlmColorTags(
-                                        contact.displayName,
-                                      );
-                                      // Resolve the sender name: in a group,
-                                      // messages may come from a participant
-                                      // other than the primary contact.
                                       final String? senderName;
                                       if (incoming) {
-                                        final senderEmail = message.from
-                                            .toLowerCase();
-                                        if (senderEmail ==
-                                            contact.email.toLowerCase()) {
-                                          senderName =
-                                              rawDisplayName.isNotEmpty &&
-                                                  rawDisplayName !=
-                                                      contact.email
-                                              ? rawDisplayName
-                                              : contact.email;
-                                        } else {
-                                          // Look up the actual sender in the
-                                          // contacts list.
-                                          final contacts = ref.read(
-                                            contactsProvider,
-                                          );
-                                          String resolved = senderEmail;
-                                          for (final c in contacts) {
-                                            if (c.email.toLowerCase() ==
-                                                senderEmail) {
-                                              final n = stripWlmColorTags(
-                                                c.displayName,
-                                              );
-                                              if (n.isNotEmpty) resolved = n;
-                                              break;
-                                            }
-                                          }
-                                          senderName = resolved;
-                                        }
+                                        senderName = _resolveDisplayName(
+                                          message.from,
+                                        );
                                       } else {
                                         senderName = null;
                                       }
@@ -943,77 +503,24 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
                                   ),
                                 ),
                               ),
-                              if (isContactTyping)
-                                Container(
-                                  width: double.infinity,
-                                  margin: const EdgeInsets.fromLTRB(
-                                    10,
-                                    0,
-                                    10,
-                                    6,
-                                  ),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                    vertical: 6,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    gradient: LinearGradient(
-                                      begin: Alignment.topCenter,
-                                      end: Alignment.bottomCenter,
-                                      colors: [
-                                        Colors.white.withOpacity(0.55),
-                                        const Color(
-                                          0xFFE4EEF6,
-                                        ).withOpacity(0.60),
-                                      ],
-                                    ),
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(
-                                      color: const Color(
-                                        0xFFCBDAE8,
-                                      ).withOpacity(0.45),
-                                    ),
-                                  ),
-                                  child: Text(
-                                    l10n.typingIndicator(
-                                      stripWlmColorTags(contact.displayName),
-                                    ),
-                                    style: const TextStyle(
-                                      color: Color(0xFF5A7A94),
-                                      fontSize: 12,
-                                      fontStyle: FontStyle.italic,
-                                      fontFamilyFallback: [
-                                        'Segoe UI',
-                                        'Tahoma',
-                                        'Arial',
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              _composeArea(
-                                contact,
-                                selfAvatarPath: selfAvatarPath,
-                                selfStatus: ref
-                                    .read(msnpClientProvider)
-                                    .selfPresence,
-                              ),
+                              _composeArea(selfAvatarPath: selfAvatarPath),
                             ],
                           ),
-                        ), // close Container (BackdropFilter child)
-                      ), // close BackdropFilter
-                    ), // close ClipRRect
-                  ), // close outer Container margin
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
-                _footerStatus(),
+                const SizedBox(height: 4),
               ],
             ),
           ),
         ),
-      ), // close Scaffold (child of AnimatedBuilder)
-    ); // close AnimatedBuilder
+      ),
+    );
   }
 
-  Widget _titleBar(Contact contact) {
+  Widget _titleBar(String label) {
     return Container(
       height: 38,
       padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -1040,7 +547,7 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              '${stripWlmColorTags(contact.displayName)} <${contact.email}>',
+              label,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
@@ -1060,7 +567,6 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
   }
 
   Widget _menuBar() {
-    final contact = _currentContact();
     return Container(
       height: 34,
       width: double.infinity,
@@ -1098,46 +604,16 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
               ),
             ),
           ),
-          // Send Files — commented out for alpha
-          // GestureDetector(
-          //   onTap: () => _pickAndSendFile(contact),
-          //   child: Padding(
-          //     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          //     child: Text(
-          //       'Send Files',
-          //       style: TextStyle(
-          //         color: Colors.white.withOpacity(0.92),
-          //         fontSize: 12.5,
-          //         fontWeight: FontWeight.w400,
-          //         fontFamilyFallback: const ['Segoe UI', 'Tahoma', 'Arial'],
-          //         shadows: const [
-          //           Shadow(color: Color(0x22000000), blurRadius: 3),
-          //         ],
-          //       ),
-          //     ),
-          //   ),
-          // ),
-          // Container(
-          //   width: 1,
-          //   height: 16,
-          //   decoration: BoxDecoration(
-          //     gradient: LinearGradient(
-          //       begin: Alignment.topCenter,
-          //       end: Alignment.bottomCenter,
-          //       colors: [
-          //         Colors.white.withOpacity(0.0),
-          //         Colors.white.withOpacity(0.35),
-          //         Colors.white.withOpacity(0.0),
-          //       ],
-          //     ),
-          //   ),
-          // ),
+          // Leave button — group-only action
           GestureDetector(
-            onTap: () => _showInviteContactPicker(contact),
+            onTap: () async {
+              await ref.read(msnpClientProvider).leaveSwitchboard();
+              if (mounted) Navigator.of(context).pop();
+            },
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
               child: Text(
-                'Invite',
+                'Leave',
                 style: TextStyle(
                   color: Colors.white.withOpacity(0.92),
                   fontSize: 12.5,
@@ -1155,188 +631,32 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
     );
   }
 
-  Widget _p2pStatusBar(P2pStatus status) {
-    final isComplete = status.message.contains('Complete');
-    final isIdle = status.message == 'Avatar: idle';
-    final showProgress =
-        status.totalSize > 0 && status.bytesReceived > 0 && !isComplete;
-
-    final Color topColor;
-    final Color bottomColor;
-    final Color borderColor;
-    final Color textColor;
-    final Color progressBg;
-    final Color progressFg;
-
-    if (isComplete) {
-      topColor = const Color(0xFFD8F0D8);
-      bottomColor = const Color(0xFFC4E4C4);
-      borderColor = const Color(0xFFB4D8B4).withOpacity(0.7);
-      textColor = const Color(0xFF2A6A2A);
-      progressBg = const Color(0xFFD8F0D8);
-      progressFg = const Color(0xFF4AA84A);
-    } else {
-      topColor = const Color(0xFFFFF2D4);
-      bottomColor = const Color(0xFFFFE8B4);
-      borderColor = const Color(0xFFE8D0A0).withOpacity(0.7);
-      textColor = const Color(0xFF6A5020);
-      progressBg = const Color(0xFFFFF2D4);
-      progressFg = const Color(0xFFD4A030);
-    }
-
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(8, 4, 8, 0),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [topColor, bottomColor],
-        ),
-        border: Border.all(color: borderColor, width: 1),
-        borderRadius: BorderRadius.circular(10),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF1A4978).withOpacity(0.05),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
+  /// Builds the multi-participant header with aero-framed avatars side by side.
+  Widget _groupContactHeader(Set<String> participants) {
+    final contacts = ref.watch(contactsProvider);
+    final resolved = <Contact>[];
+    for (final email in participants) {
+      Contact? found;
+      for (final c in contacts) {
+        if (c.email.toLowerCase() == email.toLowerCase()) {
+          found = c;
+          break;
+        }
+      }
+      if (found != null) {
+        resolved.add(found);
+      } else {
+        // Fallback: Create a minimal display contact
+        resolved.add(
+          Contact(
+            email: email,
+            displayName: email,
+            status: PresenceStatus.appearOffline,
           ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            status.message,
-            style: TextStyle(
-              color: textColor,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              fontFamilyFallback: const ['Segoe UI', 'Tahoma', 'Arial'],
-            ),
-          ),
-          if (showProgress) ...[
-            const SizedBox(height: 5),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(3),
-              child: LinearProgressIndicator(
-                value: status.progress,
-                backgroundColor: progressBg,
-                color: progressFg,
-                minHeight: 4,
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  /// Returns a gradient background widget for the contact header.
-  /// Uses the contact's colorScheme from UBX when available,
-  /// and falls back to the default WLM blue-sky scene as base.
-  Widget _sceneBackground(Contact contact) {
-    // 1. If the contact has a scene image file, use it.
-    final scene = contact.scene;
-    if (scene != null && scene.isNotEmpty) {
-      // Scene value may be just a filename (e.g. "0001.png") or a full asset path.
-      final assetPath = scene.contains('/')
-          ? scene
-          : 'assets/images/scenes/$scene';
-      return Image.asset(
-        assetPath,
-        fit: BoxFit.cover,
-        width: double.infinity,
-        height: double.infinity,
-        errorBuilder: (_, _, _) => const WlmSceneBackground(height: 130),
-      );
-    }
-
-    // 2. Use the contact's UBX <ColorScheme> as a colour gradient.
-    // "-1" is the WLM default meaning "no custom colour — use default scene".
-    final cs = contact.colorScheme;
-    if (cs != null && cs.isNotEmpty && cs != '-1') {
-      final parsed = int.tryParse(cs);
-      if (parsed != null && parsed != 0) {
-        // WLM stores as negative 24-bit RGB packed int.
-        final rgb = parsed < 0 ? (0xFFFFFF + parsed + 1) : parsed;
-        return _colorGradientScene(Color(0xFF000000 | (rgb & 0xFFFFFF)));
+        );
       }
     }
 
-    // Default: WLM 2009 blue-sky scene with light rays.
-    return const WlmSceneBackground(height: 130);
-  }
-
-  /// Returns a light tint of the contact's color scheme for the chat
-  /// transcript background. In WLM 2009, the message area picks up a
-  /// visible hue from the contact scene/colour.
-  Color _chatAreaTint(Contact contact) {
-    final cs = contact.colorScheme;
-    if (cs != null && cs.isNotEmpty && cs != '-1') {
-      final parsed = int.tryParse(cs);
-      if (parsed != null && parsed != 0) {
-        final rgb = parsed < 0 ? (0xFFFFFF + parsed + 1) : parsed;
-        final base = Color(0xFF000000 | (rgb & 0xFFFFFF));
-        final hsl = HSLColor.fromColor(base);
-        // WLM 2009 pastel tint — visible but soft.
-        return hsl
-            .withSaturation((hsl.saturation * 0.45).clamp(0.0, 1.0))
-            .withLightness(0.90)
-            .toColor();
-      }
-    }
-    return Colors.white;
-  }
-
-  Widget _colorGradientScene(Color baseColor) {
-    final hsl = HSLColor.fromColor(baseColor);
-    final lighter = hsl
-        .withLightness((hsl.lightness + 0.25).clamp(0.0, 0.95))
-        .toColor();
-    final lightest = hsl
-        .withLightness((hsl.lightness + 0.45).clamp(0.0, 0.97))
-        .toColor();
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [baseColor, lighter, lightest],
-        ),
-      ),
-      child: const SizedBox.expand(),
-    );
-  }
-
-  /// Builds a list of [TextSpan]s from a WLM display name, respecting
-  /// `[c=N]` colour tags.
-  List<InlineSpan> _buildColoredName(
-    String raw, {
-    required Color defaultColor,
-    required double fontSize,
-    FontWeight fontWeight = FontWeight.w400,
-  }) {
-    final segments = parseWlmColorTags(raw, defaultColor: defaultColor);
-    return segments
-        .map(
-          (s) => TextSpan(
-            text: s.text,
-            style: TextStyle(
-              color: s.color,
-              fontSize: fontSize,
-              fontWeight: fontWeight,
-              fontFamilyFallback: const ['Segoe UI', 'Tahoma', 'Arial'],
-              shadows: const [Shadow(color: Colors.white, blurRadius: 4)],
-            ),
-          ),
-        )
-        .toList();
-  }
-
-  Widget _contactHeader(Contact contact) {
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.fromLTRB(8, 6, 8, 0),
@@ -1392,99 +712,77 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
               ),
             ),
           ),
-          // Contact info overlay
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
             child: Row(
               children: [
-                SizedBox(
-                  width: 72,
-                  height: 72,
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      Positioned(
-                        top: 7,
-                        left: 7,
-                        right: 7,
-                        bottom: 7,
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(3),
-                          child: _contactAvatar(contact, width: 58, height: 58),
-                        ),
-                      ),
-                      Positioned.fill(
-                        child: ColorFiltered(
-                          colorFilter: ColorFilter.mode(
-                            _statusFrame(
-                              contact.status,
-                            ).withValues(alpha: 0.35),
-                            BlendMode.srcATop,
+                // Aero-framed avatars side by side
+                ...resolved.map(
+                  (c) => Padding(
+                    padding: const EdgeInsets.only(right: 4),
+                    child: SizedBox(
+                      width: 60,
+                      height: 60,
+                      child: Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          Positioned(
+                            top: 6,
+                            left: 6,
+                            right: 6,
+                            bottom: 6,
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(3),
+                              child: _contactAvatar(c, width: 48, height: 48),
+                            ),
                           ),
-                          child: Image.asset(
-                            _assetAvatarFrame,
-                            fit: BoxFit.fill,
+                          Positioned.fill(
+                            child: ColorFiltered(
+                              colorFilter: ColorFilter.mode(
+                                _statusFrame(c.status).withValues(alpha: 0.35),
+                                BlendMode.srcATop,
+                              ),
+                              child: Image.asset(
+                                _assetAvatarFrame,
+                                fit: BoxFit.fill,
+                              ),
+                            ),
                           ),
-                        ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 8),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Text.rich(
-                        TextSpan(
-                          children: _buildColoredName(
-                            contact.displayName,
-                            defaultColor: const Color(0xFF1A3A5C),
-                            fontSize: 19,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        maxLines: 1,
+                      Text(
+                        resolved
+                            .map((c) => stripWlmColorTags(c.displayName))
+                            .join(', '),
+                        maxLines: 2,
                         overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Color(0xFF1A3A5C),
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
+                          shadows: [Shadow(color: Colors.white, blurRadius: 4)],
+                        ),
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        '(${_statusLabel(context, contact.status)})',
-                        style: TextStyle(
-                          color: const Color(0xFF5A7A94),
+                        '${resolved.length} participants',
+                        style: const TextStyle(
+                          color: Color(0xFF5A7A94),
                           fontSize: 12.5,
                           fontWeight: FontWeight.w400,
-                          fontFamilyFallback: const [
-                            'Segoe UI',
-                            'Tahoma',
-                            'Arial',
-                          ],
+                          fontFamilyFallback: ['Segoe UI', 'Tahoma', 'Arial'],
                         ),
                       ),
-                      const SizedBox(height: 3),
-                      if ((contact.nowPlaying != null &&
-                              contact.nowPlaying!.isNotEmpty) ||
-                          (contact.personalMessage != null &&
-                              contact.personalMessage!.isNotEmpty))
-                        Text(
-                          contact.nowPlaying != null &&
-                                  contact.nowPlaying!.isNotEmpty
-                              ? '♫ ${contact.nowPlaying}'
-                              : contact.personalMessage!,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: const Color(0xFF6A8FA8),
-                            fontSize: 12,
-                            fontStyle: FontStyle.italic,
-                            fontFamilyFallback: const [
-                              'Segoe UI',
-                              'Tahoma',
-                              'Arial',
-                            ],
-                          ),
-                        ),
                     ],
                   ),
                 ),
@@ -1496,17 +794,13 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
     );
   }
 
-  Widget _composeArea(
-    Contact contact, {
-    required String? selfAvatarPath,
-    PresenceStatus selfStatus = PresenceStatus.online,
-  }) {
+  Widget _composeArea({required String? selfAvatarPath}) {
+    final selfStatus = ref.read(msnpClientProvider).selfPresence;
     return Container(
       margin: const EdgeInsets.fromLTRB(6, 4, 6, 6),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // ── Balloon + avatar row ──
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
@@ -1549,8 +843,7 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
                   ),
                 ),
               ),
-              // Triangle tail pointing from avatar to balloon — overlaps
-              // the balloon border by 4px so it looks seamlessly attached.
+              // Triangle tail
               Transform.translate(
                 offset: const Offset(4, 0),
                 child: CustomPaint(
@@ -1561,7 +854,7 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
                   ),
                 ),
               ),
-              // Acrylic composer balloon — matching main window card style
+              // Composer balloon
               Expanded(
                 child: Container(
                   constraints: const BoxConstraints(minHeight: 72),
@@ -1599,7 +892,6 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      // Subtle glass highlight bar
                       Container(
                         height: 2,
                         decoration: BoxDecoration(
@@ -1617,15 +909,14 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
                           ),
                         ),
                       ),
-                      // Text field
                       Padding(
                         padding: const EdgeInsets.fromLTRB(10, 4, 10, 4),
                         child: SizedBox(
                           height: 52,
                           child: TextField(
                             controller: _controller,
-                            onChanged: (_) => _sendTypingPulse(contact),
-                            onSubmitted: (_) => _sendMessage(contact),
+                            onChanged: (_) => _sendTypingPulse(),
+                            onSubmitted: (_) => _sendMessage(),
                             maxLines: null,
                             expands: true,
                             style: const TextStyle(
@@ -1658,16 +949,14 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
                           ),
                         ),
                       ),
-                      // Toolbar
                       Container(
                         padding: const EdgeInsets.fromLTRB(8, 0, 8, 6),
                         child: Row(
                           children: [
                             _emoticonButton(),
                             const Spacer(),
-                            // Nudge button — warm amber, softer and rounder
                             GestureDetector(
-                              onTap: () => _sendNudge(contact),
+                              onTap: () => _sendNudge(),
                               child: Container(
                                 padding: const EdgeInsets.symmetric(
                                   horizontal: 10,
@@ -1726,9 +1015,8 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
                                 ),
                               ),
                             ),
-                            // Send button — soft aqua-blue
                             GestureDetector(
-                              onTap: () => _sendMessage(contact),
+                              onTap: () => _sendMessage(),
                               child: Container(
                                 padding: const EdgeInsets.symmetric(
                                   horizontal: 14,
@@ -1785,38 +1073,6 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
     );
   }
 
-  Widget _footerStatus() {
-    return const SizedBox(height: 4);
-  }
-
-  Widget _captionButton(String text, {bool close = false}) {
-    return Container(
-      width: 28,
-      height: 20,
-      margin: const EdgeInsets.only(left: 2),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: close
-              ? [const Color(0xFFDA6B4F), const Color(0xFFC3473A)]
-              : [const Color(0xFF5899CC), const Color(0xFF3D78A9)],
-        ),
-        border: Border.all(color: const Color(0x80FFFFFF)),
-        borderRadius: BorderRadius.circular(2),
-      ),
-      alignment: Alignment.center,
-      child: Text(
-        text,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 13,
-          shadows: [Shadow(color: Color(0x60000000), blurRadius: 2)],
-        ),
-      ),
-    );
-  }
-
   Widget _selfAvatar(String? path, {double? width, double? height}) {
     if (path != null && path.isNotEmpty) {
       final file = File(path);
@@ -1835,7 +1091,6 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
         );
       }
     }
-
     return Image.asset(
       _assetAvatarUser,
       width: width,
@@ -1854,7 +1109,6 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
       onTap: _toggleEmoticonPicker,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-        // Clip to a single 19×19 cell from the sprite sheet (cell 0 = smiley)
         child: SizedBox(
           width: 19,
           height: 19,
@@ -1890,7 +1144,6 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
     _emoticonOverlay = OverlayEntry(
       builder: (_) => Stack(
         children: [
-          // Dismiss scrim
           Positioned.fill(
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
@@ -1930,28 +1183,6 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
   }
 }
 
-/// Paints a small left-pointing triangle for the speech bubble.
-class _SpeechTrianglePainter extends CustomPainter {
-  _SpeechTrianglePainter({required this.color});
-  final Color color;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()..color = color;
-    final path = Path()
-      ..moveTo(0, size.height / 2)
-      ..lineTo(size.width, 0)
-      ..lineTo(size.width, size.height)
-      ..close();
-    canvas.drawPath(path, paint);
-  }
-
-  @override
-  bool shouldRepaint(_SpeechTrianglePainter old) => old.color != color;
-}
-
-/// Paints a speech-bubble tail (triangle) pointing left from the balloon,
-/// with border matching the acrylic composer balloon.
 class _BalloonTailPainter extends CustomPainter {
   _BalloonTailPainter({required this.fillColor, required this.borderColor});
   final Color fillColor;
@@ -1967,7 +1198,6 @@ class _BalloonTailPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.0
       ..strokeJoin = StrokeJoin.round;
-    // Clip the right 4px so the tail disappears behind the balloon border.
     canvas.clipRect(Rect.fromLTWH(0, 0, size.width - 3, size.height));
     final path = Path()
       ..moveTo(size.width, 0)
@@ -1975,7 +1205,6 @@ class _BalloonTailPainter extends CustomPainter {
       ..lineTo(size.width, size.height)
       ..close();
     canvas.drawPath(path, fill);
-    // Only draw the two outer edges (top-left, bottom-left)
     final borderPath = Path()
       ..moveTo(size.width, 0)
       ..lineTo(0, size.height * 0.5)

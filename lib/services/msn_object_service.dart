@@ -216,6 +216,10 @@ class MsnObjectService {
     required String host,
   }) {
     final uris = <Uri>[];
+
+    // Only use the direct URL embedded in the MSNObject (if any).
+    // Do NOT guess server-side storage paths — those are server-specific
+    // and should be discovered via GetProfile or SOAP responses.
     final direct = parsed.url;
     if (direct != null && direct.isNotEmpty) {
       final parsedUri = _coerceUri(direct, host);
@@ -224,165 +228,7 @@ class MsnObjectService {
       }
     }
 
-    final sha1d = parsed.sha1d;
-    final creator = parsed.creator;
-    final location = parsed.location;
-
-    // CrossTalk canonical path: /crosstalk/{euf-guid-suffix}/{url-encoded-sha1d}
-    // Discovered via Wireshark dump of real WLM 14 traffic.
-    // MUST use crosstalk.im hostname (not raw IP) for correct Host header.
-    // MUST use lowercase percent-encoding to match the official client exactly.
-    if (sha1d != null && sha1d.isNotEmpty) {
-      const eufSuffix = 'F126696BDBF6';
-      final encodedSha = Uri.encodeComponent(sha1d)
-          .replaceAll('%2F', '%2f')
-          .replaceAll('%3D', '%3d')
-          .replaceAll('%2B', '%2b');
-      uris.add(
-        Uri.parse('http://crosstalk.im/crosstalk/$eufSuffix/$encodedSha'),
-      );
-    }
-
-    void addPath(String path) {
-      uris.add(Uri(scheme: 'http', host: host, port: 80, path: path));
-      if (host != 'crosstalk.im') {
-        uris.add(Uri(scheme: 'https', host: 'crosstalk.im', path: path));
-        uris.add(
-          Uri(scheme: 'http', host: 'crosstalk.im', port: 80, path: path),
-        );
-      } else {
-        uris.add(Uri(scheme: 'https', host: host, path: path));
-      }
-    }
-
-    void addQueryPath(String path, Map<String, String> query) {
-      uris.add(
-        Uri(
-          scheme: 'http',
-          host: host,
-          port: 80,
-          path: path,
-          queryParameters: query,
-        ),
-      );
-      if (host != 'crosstalk.im') {
-        uris.add(
-          Uri(
-            scheme: 'https',
-            host: 'crosstalk.im',
-            path: path,
-            queryParameters: query,
-          ),
-        );
-        uris.add(
-          Uri(
-            scheme: 'http',
-            host: 'crosstalk.im',
-            port: 80,
-            path: path,
-            queryParameters: query,
-          ),
-        );
-      } else {
-        uris.add(
-          Uri(scheme: 'https', host: host, path: path, queryParameters: query),
-        );
-      }
-    }
-
-    final shaVariants = _shaVariants(sha1d);
-    if (shaVariants.isNotEmpty) {
-      for (final token in shaVariants) {
-        final enc = Uri.encodeComponent(token);
-        addPath('/storage/avatar/$enc');
-        addPath('/avatar/$enc');
-        addPath('/avatars/$enc');
-        addPath('/displaypic/$enc');
-        addPath('/displaypicture/$enc');
-      }
-      addQueryPath('/storage/avatar', <String, String>{'sha1d': sha1d!});
-      addQueryPath('/storage/avatar', <String, String>{'sha1': sha1d});
-      addQueryPath('/storage/avatar', <String, String>{'hash': sha1d});
-    }
-
-    if (creator != null && creator.isNotEmpty) {
-      final creatorEnc = Uri.encodeComponent(creator.toLowerCase());
-      addPath('/storage/avatar/$creatorEnc');
-      addPath('/avatar/$creatorEnc');
-      addPath('/displaypic/$creatorEnc');
-
-      for (final token in shaVariants) {
-        final enc = Uri.encodeComponent(token);
-        addPath('/storage/avatar/$creatorEnc/$enc');
-        addPath('/avatar/$creatorEnc/$enc');
-        addPath('/displaypic/$creatorEnc/$enc');
-      }
-
-      if (sha1d != null && sha1d.isNotEmpty) {
-        addQueryPath('/storage/avatar', <String, String>{
-          'creator': creator,
-          'sha1d': sha1d,
-        });
-        addQueryPath('/avatar', <String, String>{
-          'creator': creator,
-          'sha1d': sha1d,
-        });
-        addQueryPath('/displaypic', <String, String>{
-          'creator': creator,
-          'sha1d': sha1d,
-        });
-      }
-
-      if (location != null && location.isNotEmpty) {
-        final locationEnc = Uri.encodeComponent(location);
-        addPath('/storage/avatar/$creatorEnc/$locationEnc');
-        addPath('/displaypic/$creatorEnc/$locationEnc');
-      }
-    }
-
-    // Deduplicate preserving order.
-    final seen = <String>{};
-    final deduped = <Uri>[];
-    for (final uri in uris) {
-      final key = uri.toString();
-      if (seen.contains(key)) {
-        continue;
-      }
-      seen.add(key);
-      deduped.add(uri);
-    }
-    return deduped;
-  }
-
-  List<String> _shaVariants(String? sha1d) {
-    if (sha1d == null || sha1d.trim().isEmpty) {
-      return const <String>[];
-    }
-    final raw = sha1d.trim();
-    final variants = <String>{raw};
-    try {
-      final normalized = _normalizeBase64(raw);
-      final bytes = base64.decode(normalized);
-      final hexLower = bytes
-          .map((b) => b.toRadixString(16).padLeft(2, '0'))
-          .join();
-      variants.add(hexLower);
-      variants.add(hexLower.toUpperCase());
-      final b64Url = base64Url.encode(bytes).replaceAll('=', '');
-      variants.add(b64Url);
-    } catch (_) {
-      // Keep raw only when SHA1D is not strict base64.
-    }
-    return variants.toList(growable: false);
-  }
-
-  String _normalizeBase64(String input) {
-    var value = input.replaceAll('-', '+').replaceAll('_', '/');
-    final rem = value.length % 4;
-    if (rem != 0) {
-      value += '=' * (4 - rem);
-    }
-    return value;
+    return uris;
   }
 
   Future<Directory> _avatarCacheDir() async {

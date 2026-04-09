@@ -10,6 +10,7 @@ import 'providers/chat_provider.dart';
 import 'providers/connection_provider.dart';
 import 'screens/login/login_screen.dart';
 import 'services/notification_service.dart';
+import 'utils/presence_status.dart';
 
 /// Notifier that holds the current app lifecycle state.
 class AppLifecycleNotifier extends Notifier<AppLifecycleState> {
@@ -60,6 +61,7 @@ class _WlmAppState extends ConsumerState<WlmApp>
   late final AnimationController _shakeController;
   late final Animation<double> _shakeAnimation;
   int _lastNudgeCount = 0;
+  PresenceStatus? _presenceBeforeBackground;
 
   @override
   void initState() {
@@ -69,9 +71,10 @@ class _WlmAppState extends ConsumerState<WlmApp>
       vsync: this,
       duration: const Duration(milliseconds: 500),
     );
-    _shakeAnimation = Tween<double>(begin: 0, end: 1).animate(
-      CurvedAnimation(parent: _shakeController, curve: Curves.linear),
-    );
+    _shakeAnimation = Tween<double>(
+      begin: 0,
+      end: 1,
+    ).animate(CurvedAnimation(parent: _shakeController, curve: Curves.linear));
     _initServices();
   }
 
@@ -135,7 +138,9 @@ class _WlmAppState extends ConsumerState<WlmApp>
   void _registerTaskDataCallback() {
     _taskDataCallback ??= (Object data) {
       if (data == 'keepalive') {
-        ref.read(msnpClientProvider).sendPing();
+        final client = ref.read(msnpClientProvider);
+        // sendPing() now auto-triggers reconnect if the socket is dead.
+        client.sendPing();
       }
     };
     FlutterForegroundTask.addTaskDataCallback(_taskDataCallback!);
@@ -163,16 +168,34 @@ class _WlmAppState extends ConsumerState<WlmApp>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     ref.read(appLifecycleProvider.notifier).update(state);
+    final client = ref.read(msnpClientProvider);
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused) {
       // App went to background — start true foreground service to keep alive.
       _startForegroundService();
+      // Set presence to Away so contacts see we're not at the screen.
+      final current = client.selfPresence;
+      if (current == PresenceStatus.online || current == PresenceStatus.busy) {
+        _presenceBeforeBackground = current;
+        client.setPresence(PresenceStatus.away);
+      }
     } else if (state == AppLifecycleState.resumed) {
       // App came back — stop the foreground service.
       _stopForegroundService();
+      // Restore the presence the user had before backgrounding.
+      if (_presenceBeforeBackground != null) {
+        client.setPresence(_presenceBeforeBackground!);
+        _presenceBeforeBackground = null;
+      }
       // Verify the MSNP connection is still alive; send a ping to detect
       // silent disconnects that happened while backgrounded.
-      ref.read(msnpClientProvider).sendPing();
+      // sendPing() will auto-trigger reconnect if the socket died.
+      if (!client.isConnected) {
+        // Socket died while backgrounded — trigger immediate reconnect.
+        client.sendPing();
+      } else {
+        client.sendPing();
+      }
     }
   }
 
@@ -199,30 +222,27 @@ class _WlmAppState extends ConsumerState<WlmApp>
         final dx = _shakeController.isAnimating
             ? sin(_shakeAnimation.value * pi * 6) * 8.0
             : 0.0;
-        return Transform.translate(
-          offset: Offset(dx, 0),
-          child: child,
-        );
+        return Transform.translate(offset: Offset(dx, 0), child: child);
       },
       child: MaterialApp(
-      onGenerateTitle: (context) => AppLocalizations.of(context)!.appTitle,
-      debugShowCheckedModeBanner: false,
-      locale: const Locale('en'),
-      supportedLocales: AppLocalizations.supportedLocales,
-      localizationsDelegates: const [
-        AppLocalizations.delegate,
-        GlobalMaterialLocalizations.delegate,
-        GlobalWidgetsLocalizations.delegate,
-        GlobalCupertinoLocalizations.delegate,
-      ],
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF33A7E8)),
-        fontFamily: 'SegoeUI',
-        textTheme: textTheme,
-        useMaterial3: true,
+        onGenerateTitle: (context) => AppLocalizations.of(context)!.appTitle,
+        debugShowCheckedModeBanner: false,
+        locale: const Locale('en'),
+        supportedLocales: AppLocalizations.supportedLocales,
+        localizationsDelegates: const [
+          AppLocalizations.delegate,
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        theme: ThemeData(
+          colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF33A7E8)),
+          fontFamily: 'SegoeUI',
+          textTheme: textTheme,
+          useMaterial3: true,
+        ),
+        home: const LoginScreen(),
       ),
-      home: const LoginScreen(),
-    ),
     );
   }
 }

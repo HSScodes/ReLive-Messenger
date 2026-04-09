@@ -1,4 +1,4 @@
-import 'dart:io';
+﻿import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/painting.dart';
@@ -241,7 +241,7 @@ class NotificationService {
   // ── Aero-framed avatar renderer for notifications ──────────────────────
 
   static const _assetFrame =
-      'assets/images/extracted/msgsres/carved_png_9812096.png';
+      'assets/images/app/ui/carved_png_9812096.png';
 
   /// Renders the avatar at 512×512 with the WLM aero glass frame overlay,
   /// properly inset so the photo sits inside the frame's transparent center.

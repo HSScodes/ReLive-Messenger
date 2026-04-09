@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../app.dart';
 import '../models/contact.dart';
+import '../models/group_conversation.dart';
 import '../models/message.dart';
 import '../network/msnp_parser.dart';
 import '../services/chat_history_service.dart';
@@ -15,6 +16,8 @@ import '../services/notification_service.dart';
 import '../services/sound_service.dart';
 import 'connection_provider.dart';
 import 'contacts_provider.dart';
+import 'group_conversations_provider.dart';
+import '../utils/presence_status.dart';
 
 class InboundChatEmailNotifier extends Notifier<String?> {
   @override
@@ -116,10 +119,17 @@ class ChatNotifier extends Notifier<List<Message>> {
   StreamSubscription<FileTransferSession>? _ftFailedSub;
   final SoundService _soundService = const SoundService();
   final ChatHistoryService _historyService = ChatHistoryService();
+  DateTime? _lastNudgeSent;
 
   @override
   List<Message> build() {
     final client = ref.watch(msnpClientProvider);
+    // Cancel any prior subscriptions before re-subscribing (prevents
+    // duplicate event delivery when the provider rebuilds aggressively).
+    _subscription?.cancel();
+    _ftCompletedSub?.cancel();
+    _ftProgressSub?.cancel();
+    _ftFailedSub?.cancel();
     _subscription = client.events.listen(_onEvent);
     _ftCompletedSub = client.fileTransferService.completedStream.listen(
       _onFileTransferCompleted,
@@ -150,6 +160,16 @@ class ChatNotifier extends Notifier<List<Message>> {
   }
 
   void _appendMessage(Message message) {
+    // Dedup safety net: skip if last message has same from+body within 1s.
+    if (state.isNotEmpty) {
+      final last = state.last;
+      if (last.from == message.from &&
+          last.body == message.body &&
+          message.timestamp.difference(last.timestamp).inMilliseconds.abs() <
+              1000) {
+        return;
+      }
+    }
     state = [...state, message];
     unawaited(_historyService.saveMessages(state));
   }
@@ -178,6 +198,43 @@ class ChatNotifier extends Notifier<List<Message>> {
         ),
       );
       _notifyIfBackgrounded(event.from!, 'Nudge', isNudge: true);
+      return;
+    }
+
+    // ── Switchboard join / leave (group sessions) ───────────────────────
+    if (event.type == MsnpEventType.system && event.command == 'SBJOIN') {
+      final client = ref.read(msnpClientProvider);
+      if (client.isGroupSession) {
+        final participants = client.sbParticipants;
+        ref.read(groupConversationsProvider.notifier).addOrUpdate(participants);
+        final convId = GroupConversation.buildId(participants);
+        _appendMessage(
+          Message(
+            from: 'system',
+            to: '',
+            body: '${event.from} joined the conversation',
+            timestamp: DateTime.now(),
+            conversationId: convId,
+          ),
+        );
+      }
+      return;
+    }
+    if (event.type == MsnpEventType.system && event.command == 'SBLEAVE') {
+      final client = ref.read(msnpClientProvider);
+      // Build convId from the participants that WERE in the session (including the one who left).
+      final remaining = client.sbParticipants;
+      final allParticipants = {...remaining, event.from!.toLowerCase()};
+      final convId = GroupConversation.buildId(allParticipants);
+      _appendMessage(
+        Message(
+          from: 'system',
+          to: '',
+          body: '${event.from} left the conversation',
+          timestamp: DateTime.now(),
+          conversationId: convId,
+        ),
+      );
       return;
     }
 
@@ -274,10 +331,23 @@ class ChatNotifier extends Notifier<List<Message>> {
       if (isContactMessage) {
         await _soundService.playNewMessage();
       }
+      final client = ref.read(msnpClientProvider);
+      String? conversationId;
+      if (client.isGroupSession) {
+        final participants = client.sbParticipants;
+        conversationId = GroupConversation.buildId(participants);
+        ref.read(groupConversationsProvider.notifier).addOrUpdate(participants);
+      }
       final activeEmail = ref.read(activeChatEmailProvider);
       if (isContactMessage &&
           (activeEmail == null || activeEmail != incoming)) {
-        ref.read(contactsProvider.notifier).incrementUnreadForEmail(incoming);
+        if (conversationId != null) {
+          ref
+              .read(groupConversationsProvider.notifier)
+              .incrementUnread(conversationId);
+        } else {
+          ref.read(contactsProvider.notifier).incrementUnreadForEmail(incoming);
+        }
       }
       ref.read(typingContactsProvider.notifier).clearTyping(event.from!);
       _appendMessage(
@@ -286,6 +356,7 @@ class ChatNotifier extends Notifier<List<Message>> {
           to: event.to ?? '',
           body: event.body!,
           timestamp: DateTime.now(),
+          conversationId: conversationId,
         ),
       );
       if (isContactMessage) {
@@ -336,24 +407,77 @@ class ChatNotifier extends Notifier<List<Message>> {
     return state
         .where(
           (message) =>
-              message.from.toLowerCase() == normalized ||
-              message.to.toLowerCase() == normalized,
+              message.conversationId == null &&
+              (message.from.toLowerCase() == normalized ||
+                  message.to.toLowerCase() == normalized),
         )
         .toList(growable: false);
   }
 
-  Future<void> sendMessage({required String to, required String body}) async {
+  List<Message> threadForGroup(String conversationId) {
+    return state
+        .where((message) => message.conversationId == conversationId)
+        .toList(growable: false);
+  }
+
+  Future<void> sendMessage({
+    required String to,
+    required String body,
+    String? conversationId,
+  }) async {
     final client = ref.read(msnpClientProvider);
     final cleanBody = body.trim();
     if (cleanBody.isEmpty) {
       return;
     }
 
-    await client.sendInstantMessage(to: to, body: cleanBody);
+    // Check if the recipient is offline — if so, try sending via OIM.
+    final contacts = ref.read(contactsProvider);
+    final normalized = to.trim().toLowerCase();
+    final contact = contacts
+        .where((c) => c.email.toLowerCase() == normalized)
+        .firstOrNull;
+    final isOffline =
+        contact != null && contact.status == PresenceStatus.appearOffline;
+
+    print(
+      '[OIM] sendMessage to=$to, contactFound=${contact != null}, '
+      'status=${contact?.status}, isOffline=$isOffline',
+    );
+
+    if (isOffline) {
+      print('[OIM] Attempting OIM send to $to');
+      final ok = await client.sendOfflineMessage(
+        recipientEmail: to,
+        body: cleanBody,
+      );
+      if (!ok) {
+        print('[OIM] OIM send failed, falling back to SB');
+        // Fall back to normal SB delivery if OIM fails.
+        await client.sendInstantMessage(to: to, body: cleanBody);
+      } else {
+        print('[OIM] OIM send succeeded for $to');
+      }
+    } else {
+      await client.sendInstantMessage(to: to, body: cleanBody);
+    }
+
     ref.read(typingContactsProvider.notifier).clearTyping(to);
     final from = client.selfEmail.isEmpty ? 'me' : client.selfEmail;
+    // In a group session, auto-detect conversationId if not explicitly given.
+    final effectiveConvId =
+        conversationId ??
+        (client.isGroupSession
+            ? GroupConversation.buildId(client.sbParticipants)
+            : null);
     _appendMessage(
-      Message(from: from, to: to, body: cleanBody, timestamp: DateTime.now()),
+      Message(
+        from: from,
+        to: to,
+        body: cleanBody,
+        timestamp: DateTime.now(),
+        conversationId: effectiveConvId,
+      ),
     );
   }
 
@@ -363,6 +487,13 @@ class ChatNotifier extends Notifier<List<Message>> {
   }
 
   Future<void> sendNudge(String to) async {
+    // Dedup: ignore if a nudge was sent within the last 4 seconds.
+    final now = DateTime.now();
+    if (_lastNudgeSent != null &&
+        now.difference(_lastNudgeSent!).inSeconds < 4) {
+      return;
+    }
+    _lastNudgeSent = now;
     final client = ref.read(msnpClientProvider);
     await client.sendNudge(to: to);
     await _soundService.playNudge();

@@ -17,26 +17,64 @@ class SoundService {
     await _safePlayAsset('sounds/nudge.wav');
   }
 
-  Future<void> playNewEmail() async {
-    await _safePlayAsset('sounds/newemail.wav');
-  }
-
-  Future<void> playOnline() async {
-    await _safePlayAsset('sounds/online.wav');
-  }
-
   Future<void> playNewMessage() async {
     await _safePlayAsset('sounds/type.wav');
   }
 
   /// Plays the given asset. Returns true if playback started successfully.
   Future<bool> _safePlayAsset(String assetPath) async {
-    // ── Approach 1: SoundPool (low-latency) + AssetSource ──
-    // SoundPool is purpose-built for short notification/UI sounds on Android
-    // and handles PCM WAV reliably where MediaPlayer sometimes refuses.
+    // ── Load raw bytes for all Android approaches ──
+    // We need bytes early because the primary approach (DeviceFileSource)
+    // requires a temp file from the asset bytes.
+    final bytes = await _loadAssetBytes(assetPath);
+
+    // ── Approach 1: Temp file + DeviceFileSource + Notification context ──
+    // MediaPlayer with DeviceFileSource properly respects AudioAttributes
+    // and routes audio through the notification volume stream.
+    // AssetSource + MediaPlayer fails with setDataSourceFD on many devices.
+    if (Platform.isAndroid && bytes != null && bytes.isNotEmpty) {
+      final file = await _writeTempSoundFile(
+        assetPath: assetPath,
+        bytes: bytes,
+      );
+      if (file != null) {
+        try {
+          final mp = AudioPlayer();
+          await mp.setAudioContext(
+            AudioContext(
+              android: AudioContextAndroid(
+                usageType: AndroidUsageType.notification,
+                contentType: AndroidContentType.sonification,
+                audioFocus: AndroidAudioFocus.gainTransientMayDuck,
+              ),
+            ),
+          );
+          await mp.play(DeviceFileSource(file.path));
+          _disposeAfterPlayback(mp);
+          return true;
+        } catch (e) {
+          print(
+            '[SoundService] DeviceFileSource+Notification failed for $assetPath: $e',
+          );
+        }
+      }
+    }
+
+    // ── Approach 2: SoundPool (low-latency) + AssetSource ──
+    // Handles PCM WAV reliably but may not respect the notification
+    // volume slider on all devices.
     if (Platform.isAndroid) {
       try {
         final lp = AudioPlayer();
+        await lp.setAudioContext(
+          AudioContext(
+            android: AudioContextAndroid(
+              usageType: AndroidUsageType.notification,
+              contentType: AndroidContentType.sonification,
+              audioFocus: AndroidAudioFocus.gainTransientMayDuck,
+            ),
+          ),
+        );
         await lp.play(AssetSource(assetPath), mode: PlayerMode.lowLatency);
         _disposeAfterPlayback(lp);
         return true;
@@ -45,22 +83,6 @@ class SoundService {
       }
     }
 
-    // ── Approach 2: MediaPlayer + AssetSource ──
-    if (Platform.isAndroid) {
-      try {
-        final mp = AudioPlayer();
-        await mp.play(AssetSource(assetPath));
-        _disposeAfterPlayback(mp);
-        return true;
-      } catch (e) {
-        print(
-          '[SoundService] MediaPlayer AssetSource failed for $assetPath: $e',
-        );
-      }
-    }
-
-    // ── Load raw bytes for the remaining fallbacks ──
-    final bytes = await _loadAssetBytes(assetPath);
     if (bytes == null || bytes.isEmpty) {
       print('[SoundService] Asset bytes empty for $assetPath');
       if (Platform.isWindows) {
@@ -69,20 +91,7 @@ class SoundService {
       return false;
     }
 
-    // ── Approach 3: Temp file + DeviceFileSource ──
-    final file = await _writeTempSoundFile(assetPath: assetPath, bytes: bytes);
-    if (file != null) {
-      try {
-        final mp = AudioPlayer();
-        await mp.play(DeviceFileSource(file.path));
-        _disposeAfterPlayback(mp);
-        return true;
-      } catch (e) {
-        print('[SoundService] DeviceFileSource failed for $assetPath: $e');
-      }
-    }
-
-    // ── Approach 4: BytesSource (last resort) ──
+    // ── Approach 3: BytesSource (last resort) ──
     try {
       final mp = AudioPlayer();
       await mp.play(BytesSource(bytes));

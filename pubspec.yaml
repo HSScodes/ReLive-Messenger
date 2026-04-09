@@ -16,7 +16,15 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+1
+#
+# ── Versioning convention ──────────────────────────────────────────────
+# pubspec version  : MAJOR.MINOR.PATCH+BUILD  (e.g. 0.1.0+1)
+# GitHub tag       : vMAJOR.MINOR.PATCH       (e.g. v0.1.0)
+# Progression      : v0.1.0 → v0.1.1 → v0.1.2 … v0.2.0 … v1.0.0
+# The update checker strips the 'v' prefix from the GitHub tag and
+# compares MAJOR.MINOR.PATCH numerically against package_info_plus.
+# When releasing: bump this version AND create a matching GitHub tag.
+version: 0.1.2+1
 
 environment:
   sdk: ^3.11.4
@@ -44,9 +52,12 @@ dependencies:
   path_provider: ^2.1.5
   intl: ^0.20.2
   shared_preferences: ^2.5.3
+  flutter_secure_storage: ^9.2.4
   file_picker: ^10.1.9
   flutter_local_notifications: ^18.0.1
   flutter_foreground_task: ^8.13.3
+  url_launcher: ^6.3.1
+  package_info_plus: ^9.0.1
 
 dev_dependencies:
   flutter_test:
@@ -74,37 +85,10 @@ flutter:
   assets:
     - assets/sounds/
     - assets/images/
-    - assets/images/extracted/
-    - assets/images/extracted/login_anim/
-    - assets/images/extracted/custsat/
-    - assets/images/extracted/liveNatTrav/
-    - assets/images/extracted/livetransport/
-    - assets/images/extracted/msgrapp.14.0.8117.0416/
-    - assets/images/extracted/msgsc.14.0.8117.0416/
-    - assets/images/extracted/msgslang.14.0.8117.0416/
-    - assets/images/extracted/msgsres/
-    - assets/images/extracted/msgswcam/
-    - assets/images/extracted/msidcrl40/
-    - assets/images/extracted/msimg32/
-    - assets/images/extracted/msvsui/
-    - assets/images/extracted/PresenceIM/
-    - assets/images/extracted/psmsong.14.0.8117.0416/
-    - assets/images/extracted/reroute/
-    - assets/images/extracted/rtmpltfm/
-    - assets/images/extracted/sqmapi/
-    - assets/images/extracted/uccapi/
-    - assets/images/extracted/uccapires/
-    - assets/images/extracted/uxcalendar/
-    - assets/images/extracted/uxcontacts/
-    - assets/images/extracted/uxcore/
-    - assets/images/extracted/vvpltfrm/
-    - assets/images/extracted/wldcore/
-    - assets/images/extracted/wldlog/
-    - assets/images/extracted/wmaecdmort/
-    - assets/images/extracted/wmv9vcm/
-    - assets/images/scenes/
+    - assets/images/app/
+    - assets/images/app/login_anim/
+    - assets/images/app/ui/
     - assets/images/usertiles/
-    - assets/images/backgrounds/
 
   fonts:
     - family: SegoeUI

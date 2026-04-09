@@ -1,4 +1,4 @@
-import 'dart:io';
+﻿import 'dart:io';
 
 import 'package:flutter/material.dart';
 
@@ -19,7 +19,7 @@ class AvatarWidget extends StatelessWidget {
   final double size;
 
   static const _assetFrame =
-      'assets/images/extracted/msgsres/carved_png_9812096.png';
+      'assets/images/app/ui/carved_png_9812096.png';
   static const _assetPlaceholder = 'assets/images/usertiles/new_default.png';
 
   @override

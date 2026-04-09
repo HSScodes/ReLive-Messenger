@@ -7,7 +7,6 @@ import '../models/contact.dart';
 import '../network/msnp_client.dart';
 import '../network/msnp_parser.dart';
 import '../services/avatar_cache_service.dart';
-import '../services/sound_service.dart';
 import '../utils/presence_status.dart';
 import 'connection_provider.dart';
 
@@ -18,7 +17,6 @@ class ContactsNotifier extends Notifier<List<Contact>> {
   final Map<String, String> _ddpPathByEmail = <String, String>{};
   final Set<String> _avatarFetchFailedByEmail = <String>{};
   final Map<String, int> _unreadCountByEmail = <String, int>{};
-  final SoundService _soundService = const SoundService();
   final AvatarCacheService _avatarCache = AvatarCacheService();
   final Map<String, String> _sha1dByEmail = <String, String>{};
   final Set<String> _directoryFetchInFlight = <String>{};
@@ -73,12 +71,10 @@ class ContactsNotifier extends Notifier<List<Contact>> {
       return;
     }
 
-    if (
-        event.type == MsnpEventType.presence &&
+    if (event.type == MsnpEventType.presence &&
         event.command == 'FLN' &&
         event.from != null &&
-        event.from!.trim().isNotEmpty
-    ) {
+        event.from!.trim().isNotEmpty) {
       setOffline(event.from!);
       return;
     }
@@ -105,7 +101,8 @@ class ContactsNotifier extends Notifier<List<Contact>> {
         final snap = _client!.contactSnapshot
             .where((c) => c.email.toLowerCase() == email)
             .firstOrNull;
-        final isDdp = fetchedSha1d.isNotEmpty &&
+        final isDdp =
+            fetchedSha1d.isNotEmpty &&
             snap?.ddpSha1d != null &&
             snap!.ddpSha1d == fetchedSha1d;
 
@@ -133,10 +130,11 @@ class ContactsNotifier extends Notifier<List<Contact>> {
         event.type == MsnpEventType.presence ||
         event.type == MsnpEventType.contact ||
         (event.type == MsnpEventType.system &&
-        (event.command == 'ABCH' ||
-          event.command == 'UBX' ||
-          event.command == 'CHG' ||
-          event.command == 'SBPRES'));
+            (event.command == 'ABCH' ||
+                event.command == 'UBX' ||
+                event.command == 'CHG' ||
+                event.command == 'SBPRES' ||
+                event.command == 'SBJOIN'));
     if (!shouldRefresh) {
       return;
     }
@@ -148,9 +146,13 @@ class ContactsNotifier extends Notifier<List<Contact>> {
     var next = _snapshotToContacts(_client!.contactSnapshot);
 
     // Ensure reverse-list / unknown contacts from live presence are represented immediately.
-    if (event.type == MsnpEventType.presence && event.from != null && event.from!.isNotEmpty) {
+    if (event.type == MsnpEventType.presence &&
+        event.from != null &&
+        event.from!.isNotEmpty) {
       final incomingEmail = event.from!.toLowerCase();
-      final index = next.indexWhere((c) => c.email.toLowerCase() == incomingEmail);
+      final index = next.indexWhere(
+        (c) => c.email.toLowerCase() == incomingEmail,
+      );
       if (index == -1) {
         next = [
           ...next,
@@ -174,8 +176,11 @@ class ContactsNotifier extends Notifier<List<Contact>> {
               ? current.displayName
               : event.body!.trim(),
           status: event.presence ?? current.status,
-          avatarLocalPath: current.avatarLocalPath ?? _avatarPathByEmail[current.email.toLowerCase()],
-          avatarSha1d: current.avatarSha1d ?? _sha1dByEmail[current.email.toLowerCase()],
+          avatarLocalPath:
+              current.avatarLocalPath ??
+              _avatarPathByEmail[current.email.toLowerCase()],
+          avatarSha1d:
+              current.avatarSha1d ?? _sha1dByEmail[current.email.toLowerCase()],
         );
         final mutable = [...next];
         mutable[index] = updated;
@@ -199,9 +204,11 @@ class ContactsNotifier extends Notifier<List<Contact>> {
       }
       if (current != null) {
         final isNowOnline = current.status != PresenceStatus.appearOffline;
-        final wasOffline = previousStatus == null || previousStatus == PresenceStatus.appearOffline;
+        final wasOffline =
+            previousStatus == null ||
+            previousStatus == PresenceStatus.appearOffline;
         if (isNowOnline && wasOffline) {
-          await _soundService.playOnline();
+          // Sound removed — online.wav not bundled
         }
       }
     }
@@ -248,13 +255,13 @@ class ContactsNotifier extends Notifier<List<Contact>> {
 
   /// Tries to resolve a display picture for [email] with [sha1d]:
   ///   1. Persistent cache (instant, zero network)
-  ///   2. CrossTalk directory (fast HTTP GET)
-  /// If resolved, updates state immediately. The background P2P fetch may
-  /// still complete later and will overwrite with the same (or fresher) value.
+  /// Resolves the avatar for [email] from cache. The background P2P fetch
+  /// may still complete later and will overwrite with the same (or fresher)
+  /// value.
   Future<void> _resolveAvatar(String email, String sha1d) async {
     _directoryFetchInFlight.add(email);
     try {
-      // 1. Check persistent cache with sha1d match.
+      // Check persistent cache with sha1d match.
       final cached = await _avatarCache.get(email, currentSha1d: sha1d);
       if (cached != null) {
         _avatarPathByEmail[email] = cached;
@@ -263,19 +270,6 @@ class ContactsNotifier extends Notifier<List<Contact>> {
           state = _snapshotToContacts(_client!.contactSnapshot);
         }
         return;
-      }
-
-      // 2. Try CrossTalk directory as a fast-path before P2P completes.
-      if (_avatarFetchFailedByEmail.contains(email)) return;
-      final path = await _avatarCache.fetchFromCrosstalkDirectory(email,
-          sha1d: sha1d);
-      if (path != null) {
-        await _avatarCache.save(email, path, sha1d: sha1d);
-        _avatarPathByEmail[email] = path;
-        _avatarFetchFailedByEmail.remove(email);
-        if (_client != null) {
-          state = _snapshotToContacts(_client!.contactSnapshot);
-        }
       }
     } finally {
       _directoryFetchInFlight.remove(email);
@@ -305,28 +299,27 @@ class ContactsNotifier extends Notifier<List<Contact>> {
 
   List<Contact> _snapshotToContacts(List<MsnpContactSnapshot> snapshot) {
     return snapshot
-        .map(
-          (c) {
-            final email = c.email.toLowerCase();
-            return Contact(
-              email: c.email,
-              displayName: c.displayName,
-              status: c.status,
-              personalMessage: c.personalMessage,
-              nowPlaying: c.nowPlaying,
-              avatarMsnObject: c.avatarMsnObject,
-              avatarCreator: c.avatarCreator,
-              avatarSha1d: c.avatarSha1d,
-              avatarLocalPath: _ddpPathByEmail[email] ?? _avatarPathByEmail[email],
-              ddpMsnObject: c.ddpMsnObject,
-              ddpSha1d: c.ddpSha1d,
-              ddpLocalPath: _ddpPathByEmail[email],
-              scene: c.scene,
-              colorScheme: c.colorScheme,
-              unreadCount: _unreadCountByEmail[email] ?? 0,
-            );
-          },
-        )
+        .map((c) {
+          final email = c.email.toLowerCase();
+          return Contact(
+            email: c.email,
+            displayName: c.displayName,
+            status: c.status,
+            personalMessage: c.personalMessage,
+            nowPlaying: c.nowPlaying,
+            avatarMsnObject: c.avatarMsnObject,
+            avatarCreator: c.avatarCreator,
+            avatarSha1d: c.avatarSha1d,
+            avatarLocalPath:
+                _ddpPathByEmail[email] ?? _avatarPathByEmail[email],
+            ddpMsnObject: c.ddpMsnObject,
+            ddpSha1d: c.ddpSha1d,
+            ddpLocalPath: _ddpPathByEmail[email],
+            scene: c.scene,
+            colorScheme: c.colorScheme,
+            unreadCount: _unreadCountByEmail[email] ?? 0,
+          );
+        })
         .toList(growable: false);
   }
 
@@ -371,8 +364,11 @@ class ContactsNotifier extends Notifier<List<Contact>> {
     }
 
     final mutable = state.toList(growable: true);
-    mutable[index] = mutable[index].copyWith(status: PresenceStatus.appearOffline);
-    state = mutable; // triggers Riverpod rebuild (equivalent to notifyListeners)
+    mutable[index] = mutable[index].copyWith(
+      status: PresenceStatus.appearOffline,
+    );
+    state =
+        mutable; // triggers Riverpod rebuild (equivalent to notifyListeners)
   }
 }
 

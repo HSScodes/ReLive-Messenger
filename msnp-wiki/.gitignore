@@ -1,4 +1,0 @@
-*.exe
-build/
-node_modules/
-.yikicompilecache.json

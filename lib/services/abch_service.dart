@@ -177,7 +177,7 @@ class AbchService {
   List<Uri> _abchCandidateUris(String host) {
     return <Uri>[
       Uri(
-        scheme: 'http',
+        scheme: 'https',
         host: host,
         port: ServerConfig.abchPort,
         path: '/abservice/abservice.asmx',

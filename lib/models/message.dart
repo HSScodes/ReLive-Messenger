@@ -4,6 +4,7 @@ class Message {
     required this.to,
     required this.body,
     required this.timestamp,
+    this.conversationId,
     this.isNudge = false,
     this.isTyping = false,
     this.isFileTransfer = false,
@@ -18,6 +19,9 @@ class Message {
   final String to;
   final String body;
   final DateTime timestamp;
+
+  /// null = 1:1 thread, non-null = group thread (sorted participant emails joined by '+').
+  final String? conversationId;
   final bool isNudge;
   final bool isTyping;
   final bool isFileTransfer;
@@ -32,6 +36,7 @@ class Message {
     String? to,
     String? body,
     DateTime? timestamp,
+    String? conversationId,
     bool? isNudge,
     bool? isTyping,
     bool? isFileTransfer,
@@ -46,6 +51,7 @@ class Message {
       to: to ?? this.to,
       body: body ?? this.body,
       timestamp: timestamp ?? this.timestamp,
+      conversationId: conversationId ?? this.conversationId,
       isNudge: isNudge ?? this.isNudge,
       isTyping: isTyping ?? this.isTyping,
       isFileTransfer: isFileTransfer ?? this.isFileTransfer,
