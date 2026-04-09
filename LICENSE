@@ -26,8 +26,11 @@ Asset & Protocol Disclaimer:
 
 This project is an independent, fan-made recreation of the Windows Live
 Messenger 2009 experience. It is not affiliated with, endorsed by, or
-associated with Microsoft Corporation.
+associated with Microsoft Corporation or the Crosstalk.im project.
 
+- This client connects to Crosstalk.im community servers but is developed
+  independently. It is not an official Crosstalk client and the Crosstalk
+  team bears no responsibility for this project.
 - Certain UI assets (icons, sprites and fonts) are derived from or inspired by
   Windows Live Messenger, which is the property of Microsoft Corporation.
 - The MSNP protocol implementation is based on publicly documented protocol
