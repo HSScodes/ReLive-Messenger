@@ -24,21 +24,39 @@ SOFTWARE.
 
 Asset & Protocol Disclaimer:
 
-This project is an independent, fan-made recreation of the Windows Live
-Messenger 2009 experience. It is not affiliated with, endorsed by, or
-associated with Microsoft Corporation or the Crosstalk.im project.
+This project is an independent, fan-made, personal learning exercise
+inspired by the Windows Live Messenger 2009 experience. It is NOT
+affiliated with, endorsed by, sponsored by, or associated with Microsoft
+Corporation, the Crosstalk.im project, or any of their contributors.
 
-- This client connects to Crosstalk.im community servers but is developed
-  independently. It is not an official Crosstalk client and the Crosstalk
-  team bears no responsibility for this project.
-- Certain UI assets (icons, sprites and fonts) are derived from or inspired by
-  Windows Live Messenger, which is the property of Microsoft Corporation.
-- The MSNP protocol implementation is based on publicly documented protocol
-  specifications and community research. It is not derived from decompiled
-  or proprietary Microsoft source code.
-- AI-generated assets are included and are not claimed as original
-  Microsoft works.
+Crosstalk.im:
+  This client connects to Crosstalk.im community servers but is developed
+  entirely independently. It is NOT an official Crosstalk client. The
+  Crosstalk team and its contributors bear absolutely no responsibility
+  for this project, its code, its security, or its behavior. The author
+  is grateful to the Crosstalk community for their work in keeping the
+  MSN Messenger experience alive. If the Crosstalk team requests that
+  this project stop connecting to their servers or remove any references
+  to Crosstalk, the author will comply immediately.
+
+Microsoft Corporation:
+  Certain UI assets (icons, sprites, and fonts) are derived from or
+  inspired by Windows Live Messenger, which is the intellectual property
+  of Microsoft Corporation. "Windows Live Messenger" and "MSN" are
+  trademarks of Microsoft Corporation. No ownership of these materials
+  is claimed. If Microsoft requests the removal of any assets or
+  references, the author will comply immediately.
+
+MSNP Protocol:
+  The MSNP protocol implementation is based solely on publicly documented
+  protocol specifications and community research. It is not derived from
+  decompiled, reverse-engineered, or proprietary Microsoft source code.
+
+AI-Generated Content:
+  Some assets in this project are AI-generated and are not claimed as
+  original Microsoft works or original creative works of the author.
 
 These third-party materials are not covered by the MIT license above.
 All trademarks, service marks, and copyrights belong to their respective
-owners.
+owners. This project is provided solely for personal, educational, and
+non-commercial purposes.
