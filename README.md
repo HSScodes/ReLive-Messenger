@@ -38,7 +38,7 @@ I advise seeing this project as a mere prof of concept of what a modern client o
 
 v0.1.2 can be found in the [Releases](../../releases) page.
 
-Due to the backlash originated by the use of AI-generated code and assets in this project, it will not be further developed, i will be happy tough if by any chance someone reviews the source code and can help to improve it for my own learning purpose and my belief that there is space for an android WLM client.
+Due to the backlash originated by the use of AI-generated code and assets in this project, it will not be further developed, i will be happy though if by any chance someone reviews the source code and can help to improve it for my own learning purpose and my belief that there is space for an android WLM client.
 
 ---
 
