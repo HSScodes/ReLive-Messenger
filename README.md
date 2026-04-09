@@ -31,13 +31,14 @@ A functional vibe-coded proof of concept re-imagination of how Windows live mess
 
 reLive is a **WLM 2009–compatible client** that implements the MSNP protocol for interoperability with legacy Messenger-era networks and clients.
 
-Currently only supports accounts on [crosstalk.im](https://crosstalk.im) altough the dev team of these servers have banned the interaction of AI-generated code to interface with their servers after the publication of this project. As such I would advise seeing this project as a mere prof of concept of what a modern client of WLM could look if prorperly developed by a capable team instead of this current vibe coded atempt.
+Currently only supports accounts on [crosstalk.im](https://crosstalk.im)
+I advise seeing this project as a mere prof of concept of what a modern client of WLM could look if properly developed by a capable team instead of this current vibe coded atempt.
 
 ## Download
 
-v0.1.1 can be found in the [Releases](../../releases) page.
+v0.1.2 can be found in the [Releases](../../releases) page.
 
-Due to the backlash originated by the use of AI-generated code and assets in this project, it will not be further developed.
+Due to the backlash originated by the use of AI-generated code and assets in this project, it will not be further developed, i will be happy tough if by any chance someone reviews the source code and can help to improve it for my own learning purpose and my belief that there is space for an android WLM client.
 
 ---
 
