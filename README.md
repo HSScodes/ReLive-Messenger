@@ -1,8 +1,6 @@
 # reLive Messenger
 
-An independent Android messaging client with **Messenger-inspired UX**, built for **legacy chat protocol interoperability**.
-
-reLive brings the familiar Messenger experience to Android — with original assets and full compatibility with legacy MSNP-based messaging networks.
+A functional vibe-coded proof of concept re-imagination of how Windows live messenger could look if revived for Android.
 
 ---
 
@@ -20,51 +18,38 @@ reLive brings the familiar Messenger experience to Android — with original ass
 
 ## Features
 
-- **Contact list** — Grouped by Favorites, Groups, Available, and Offline with real-time presence updates
-- **Chat window** — Message balloons, emoticons, nudges, and typing indicators
-- **Display pictures** — P2P avatar exchange with contacts, plus a built-in default picture gallery
-- **Emoticons** — Classic WLM 2009 emoticon set with shortcode support
-- **Notifications** — Android-native notifications for incoming messages and nudges, with contact avatars
-- **Presence & status** — Set your display name, personal message, and online status
-- **Sound effects** — Authentic notification sounds for messages, nudges, contacts online, and more
+- **Contact list** - Grouped by Favorites, Groups, Available, and Offline with real-time presence updates
+- **Chat window** - Message balloons, emoticons, nudges, and typing indicators
+- **Display pictures** - P2P avatar exchange with contacts, plus a built-in default picture gallery
+- **Emoticons** - Classic WLM 2009 emoticon set with shortcode support
+- **Notifications** - Android-native notifications for incoming messages and nudges, with contact avatars
+- **Presence & status** - Set your display name, personal message, and online status
+- **Sound effects** - Authentic notification sounds for messages, nudges, contacts online, and more
+- **Offline Chat** - Original OIM logic
 
 ## Compatibility
 
 reLive is a **WLM 2009–compatible client** that implements the MSNP protocol for interoperability with legacy Messenger-era networks and clients.
 
-Currently supports accounts on [crosstalk.im](https://crosstalk.im).
+Currently only supports accounts on [crosstalk.im](https://crosstalk.im) altough the dev team of these servers have banned the interaction of AI-generated code to interface with their servers after the publication of this project. As such I would advise seeing this project as a mere prof of concept of what a modern client of WLM could look if prorperly developed by a capable team instead of this current vibe coded atempt.
 
 ## Download
 
-Download the latest APK from the [Releases](../../releases) page.
+v0.1.1 can be found in the [Releases](../../releases) page.
 
-> **Note:** This is an alpha build. Expect bugs and missing features.
-
-## Roadmap
-
-- File transfers
-- Scene / background customization
-- Contact management improvements
-- Stability and polish
+Due to the backlash originated by the use of AI-generated code and assets in this project, it will not be further developed.
 
 ---
 
 ## Disclaimer
 
-This is an **unofficial, independent project**.
+This is an **unofficial, independent project intended for my personal use**.
 
+- The assets used in this recreation are AI-generated from text descriptions of the original resources.
 - Not affiliated with, endorsed by, or sponsored by Microsoft Corporation.
 - Not affiliated with or endorsed by Crosstalk.
-- All branding, assets, and code in this project are recreations inspired by the WLM era.
 - Compatible with legacy Windows Live Messenger–era clients and protocols where supported.
 - "Windows Live Messenger" is a trademark of Microsoft Corporation.
 
 ---
 
-## License
-
-All rights reserved. Source code is not currently published.
-
-## Author
-
-[@HSScodes](https://github.com/HSScodes)
