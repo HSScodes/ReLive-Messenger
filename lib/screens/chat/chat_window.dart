@@ -200,8 +200,8 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
     final chatNotifier = ref.read(chatProvider.notifier);
     final oneToOne = chatNotifier.threadForContact(contactEmail);
     final client = ref.read(msnpClientProvider);
-    if (!client.isGroupSession) return oneToOne;
-    final participants = client.sbParticipants;
+    if (!client.isGroupSession(contactEmail)) return oneToOne;
+    final participants = client.sbParticipants(contactEmail);
     if (!participants.contains(contactEmail.toLowerCase())) return oneToOne;
     final groupId = GroupConversation.buildId(participants);
     final groupMsgs = chatNotifier.threadForGroup(groupId);
@@ -377,7 +377,10 @@ class _ChatWindowScreenState extends ConsumerState<ChatWindowScreen>
                           // CAL the contact into the existing switchboard
                           ref
                               .read(msnpClientProvider)
-                              .inviteToSwitchboard(c.email);
+                              .inviteToSwitchboard(
+                                c.email,
+                                intoSessionOf: widget.contact.email,
+                              );
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
                               content: Text(

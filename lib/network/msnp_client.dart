@@ -53,9 +53,7 @@ class MsnpClient {
   ];
 
   Socket? _socket;
-  Socket? _sbSocket;
   int _trId = 0;
-  int _sbTrId = 0;
   int? _lastSynTrId;
   int? _lastQryTrId;
   bool _serverSupportsSyn = false;
@@ -74,7 +72,6 @@ class MsnpClient {
   int _keepAliveSeconds = 45;
   Timer? _pongTimeout;
   final List<int> _rxBuffer = <int>[];
-  final List<int> _sbRxBuffer = <int>[];
   final Map<String, _KnownContact> _knownContacts = <String, _KnownContact>{};
   final AbchService _abchService = AbchService();
   final MsnSlpService _slpService = MsnSlpService();
@@ -104,35 +101,25 @@ class MsnpClient {
   /// to the main chat SB).  Used by _handleXfr to route the response.
   final Set<int> _pendingAvatarXfrs = <int>{};
 
-  /// Deferred RNG invitations that arrived while the P2P avatar pipeline was
-  /// busy. Each entry holds the raw RNG line. Processed in FIFO order when the
-  /// pipeline goes idle.
-  final List<String> _deferredRngLines = <String>[];
+  /// Timeouts for pending avatar XFR requests so they don't block forever.
+  final Map<int, Timer> _avatarXfrTimeouts = <int, Timer>{};
+
+  /// Pool of chat SB connections keyed by normalised contact email.
+  /// Each contact gets its own independent SB — no cross-contact contention.
+  final Map<String, _ChatSbConn> _chatSbs = <String, _ChatSbConn>{};
+
+  /// Contacts for which an XFR request has been sent but the SB endpoint has
+  /// not yet been received.  Replaces the old scalar `_sbAwaitingXfr` flag.
+  final Set<String> _chatSbPendingXfr = <String>{};
+
+  /// Maximum concurrent chat SBs.  Oldest idle connection is evicted when
+  /// this limit is reached.
+  static const int _maxConcurrentChatSbs = 10;
+
+  /// Periodic timer that evicts idle chat SBs (no activity for 3 min).
+  Timer? _chatSbEvictionTimer;
 
   _PendingFrame? _pendingFrame;
-  _PendingFrame? _sbPendingFrame;
-  final List<_PendingOutboundMessage> _sbOutboundQueue =
-      <_PendingOutboundMessage>[];
-  String? _sbSessionId;
-  String? _sbAuthToken;
-  String? _sbHost;
-  int? _sbPort;
-  String? _sbContactEmail;
-  final Set<String> _sbParticipants = <String>{};
-  bool _sbIsInviteMode = false;
-  bool _sbIsSilentAvatarSession = false;
-  bool _sbReady = false;
-  bool _sbConnecting = false;
-  bool _sbAwaitingXfr = false;
-  Timer? _sbJoinTimeoutTimer;
-  String? _sbJoinTimeoutContact;
-  String? _sbPendingRecipient;
-
-  /// Email of the contact whose P2P INVITE we have sent and are waiting on
-  /// (transport ACK + 200 OK + data). While this is non-null, no other SB
-  /// connection may be started so that the in-progress session can complete.
-  String? _sbP2pInFlightEmail;
-  Timer? _sbP2pResponseTimeout;
 
   /// Per-contact avatar stall timers (15s timeout per avatar transfer).
   final Map<String, Timer> _avatarStallTimers = <String, Timer>{};
@@ -145,8 +132,7 @@ class MsnpClient {
   /// Completers to await peer's data-complete ACK (Flags=0x02) per session.
   final Map<int, Completer<void>> _ftDataAckCompleters =
       <int, Completer<void>>{};
-  Timer? _sbXfrTimeout;
-  Timer? _sbQueueWatchdog;
+
   String _email = '';
   String _selfDisplayName = '';
   String _ticket = '';
@@ -421,6 +407,7 @@ class MsnpClient {
     required String passportTicket,
     String host = ServerConfig.host,
     int port = ServerConfig.port,
+    bool isAutoReconnect = false,
   }) async {
     _email = email.trim().toLowerCase();
     _connectedHost = host;
@@ -428,7 +415,11 @@ class MsnpClient {
     _password = password;
     _passportTicket = passportTicket;
     _keepAliveSeconds = 45;
-    _reconnectAttempts = 0;
+    // Only reset reconnect counter on manual (user-initiated) connects.
+    // Auto-reconnect must preserve the counter for exponential back-off.
+    if (!isAutoReconnect) {
+      _reconnectAttempts = 0;
+    }
     _pongMissCount = 0;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
@@ -468,9 +459,7 @@ class MsnpClient {
     _avatarBackgroundFailed.clear();
     _pendingXfrRequests.clear();
     _destroyAllAvatarSbs();
-    _sbP2pInFlightEmail = null;
-    _sbP2pResponseTimeout?.cancel();
-    _sbP2pResponseTimeout = null;
+    _destroyAllChatSbs();
     _log('Connecting to $host:$port for $email');
 
     _statusController.add(ConnectionStatus.connecting);
@@ -498,7 +487,6 @@ class MsnpClient {
 
       _log('Socket connected to $host:$port');
       _send(MsnpCommands.ver(_nextTrId()));
-      _startSbQueueWatchdog();
     } on SocketException {
       _log('SocketException while connecting/authenticating.');
       _statusController.add(ConnectionStatus.error);
@@ -582,6 +570,7 @@ class MsnpClient {
       to: to,
       payloadBytes: utf8.encode(payload.toString()),
       debugLabel: payload.toString(),
+      msgFlag: 'A',
       fallbackToNotificationServer: true,
     );
   }
@@ -609,7 +598,8 @@ class MsnpClient {
       // On explicit force-refresh, clear the invite dedup so a new INVITE can
       // be sent even if the SHA1D hasn't changed.  Skip only when the INVITE
       // is already in-flight (active SB transfer for this contact).
-      if (_sbP2pInFlightEmail != normalized &&
+      final chatConn = _chatSbs[normalized];
+      if (chatConn?.p2pInFlightEmail != normalized &&
           !_avatarSbs.containsKey(normalized)) {
         _avatarInviteSent.removeWhere((k) => k.startsWith('$normalized|'));
         _avatarSilentRequested.removeWhere((k) => k.startsWith('$normalized|'));
@@ -743,35 +733,61 @@ class MsnpClient {
       to: to,
       payloadBytes: utf8.encode(payload.toString()),
       debugLabel: payload.toString(),
+      msgFlag: 'A',
       fallbackToNotificationServer: true,
     );
   }
 
-  /// Invites another contact into the current switchboard session (CAL).
-  void inviteToSwitchboard(String email) {
-    if (_sbSocket == null || !_sbReady) {
-      _log('Cannot invite $email — no active switchboard session.');
+  /// Invites another contact into the switchboard session for [intoSessionOf].
+  void inviteToSwitchboard(String email, {required String intoSessionOf}) {
+    final norm = intoSessionOf.trim().toLowerCase();
+    final conn = _chatSbs[norm];
+    if (conn == null || conn.socket == null || !conn.ready) {
+      _log('Cannot invite $email — no active switchboard session for $norm.');
       return;
     }
-    _sendSb(MsnpCommands.cal(_nextSbTrId(), email));
-    _log('CAL sent for $email');
+    conn.send('CAL ${conn.nextTrId()} $email\r\n');
+    _log('CAL sent for $email on SB[$norm]');
   }
 
-  /// Leave the current switchboard session by sending OUT and tearing down.
-  Future<void> leaveSwitchboard() async {
-    if (_sbSocket == null) return;
+  /// Leave the switchboard session for [contactEmail].
+  Future<void> leaveSwitchboard(String contactEmail) async {
+    final norm = contactEmail.trim().toLowerCase();
+    final conn = _chatSbs[norm];
+    if (conn == null) return;
     try {
-      _sendSb('OUT\r\n');
+      conn.send('OUT\r\n');
     } catch (_) {}
-    await _disconnectSwitchboard();
-    _log('Left switchboard session.');
+    _disconnectChatSb(norm);
+    _log('Left switchboard session for $norm.');
   }
 
-  /// Current switchboard participants (unmodifiable view).
-  Set<String> get sbParticipants => Set<String>.unmodifiable(_sbParticipants);
+  /// Current switchboard participants for [contactEmail] (unmodifiable view).
+  Set<String> sbParticipants(String contactEmail) {
+    final norm = contactEmail.trim().toLowerCase();
+    final conn = _chatSbs[norm];
+    return Set<String>.unmodifiable(conn?.participants ?? <String>{});
+  }
 
-  /// True when the active switchboard has more than one remote participant.
-  bool get isGroupSession => _sbParticipants.length > 1;
+  /// True when the switchboard for [contactEmail] has more than one remote participant.
+  bool isGroupSession(String contactEmail) {
+    final norm = contactEmail.trim().toLowerCase();
+    final conn = _chatSbs[norm];
+    return (conn?.participants.length ?? 0) > 1;
+  }
+
+  /// Returns the SB key (contact email) for a group conversation by checking
+  /// which active chat SB contains ALL the given [emails] as participants.
+  /// Returns `null` if no matching SB is found.
+  String? sbKeyForGroup(Iterable<String> emails) {
+    final normalized = emails.map((e) => e.trim().toLowerCase()).toSet();
+    for (final entry in _chatSbs.entries) {
+      if (normalized.every((e) => entry.value.participants.contains(e))) {
+        return entry.key;
+      }
+    }
+    return null;
+  }
 
   // ── File transfer methods ──────────────────────────────────────────────
 
@@ -847,38 +863,42 @@ class MsnpClient {
 
     // Wait for switchboard to connect and flush the data-prep.
     for (var i = 0; i < 300; i++) {
-      if (_sbReady && _sbSocket != null && _sbContactEmail == normalizedTo)
-        break;
+      final conn = _chatSbs[normalizedTo];
+      if (conn != null && conn.ready && conn.socket != null) break;
       await Future<void>.delayed(const Duration(milliseconds: 100));
     }
-    if (!_sbReady || _sbSocket == null || _sbContactEmail != normalizedTo) {
-      _log(
-        'SB not ready after 30s for file transfer session=$sessionId — aborting',
-      );
-      _eventController.add(
-        MsnpEvent(
-          type: MsnpEventType.system,
-          command: 'FTFAILED',
-          from: normalizedTo,
-          body: '$sessionId',
-        ),
-      );
-      return;
+    {
+      final conn = _chatSbs[normalizedTo];
+      if (conn == null || !conn.ready || conn.socket == null) {
+        _log(
+          'SB not ready after 30s for file transfer session=$sessionId — aborting',
+        );
+        _eventController.add(
+          MsnpEvent(
+            type: MsnpEventType.system,
+            command: 'FTFAILED',
+            from: normalizedTo,
+            body: '$sessionId',
+          ),
+        );
+        return;
+      }
     }
 
     // Wait for peer to process the data-prep.
     await Future<void>.delayed(const Duration(milliseconds: 80));
 
     // ── Send file data chunks directly (not via queue) ──────────────
-    // Sending directly via _sendSbMsgPayload avoids all chunks being
-    // queued and flushed at once by _flushSbQueue, ensuring the 10 ms
+    // Sending directly via _sendChatSbMsgPayload avoids all chunks being
+    // queued and flushed at once by _flushChatSbQueue, ensuring the 30 ms
     // inter-chunk delay is honoured.
     for (final chunk in _fileTransferService.chunkFileForSending(
       sessionId: sessionId,
       fileBytes: fileBytes,
       baseId: dataBaseId,
     )) {
-      if (!_sbReady || _sbSocket == null) {
+      final conn = _chatSbs[normalizedTo];
+      if (conn == null || !conn.ready || conn.socket == null) {
         _log('SB lost during file transfer session=$sessionId — aborting');
         _eventController.add(
           MsnpEvent(
@@ -895,7 +915,11 @@ class MsnpClient {
           'Content-Type: application/x-msnmsgrp2p\r\n'
           'P2P-Dest: $to\r\n'
           'P2P-Src: $_email\r\n\r\n';
-      _sendSbMsgPayload([...utf8.encode(mimeHeaders), ...chunk], msgFlag: 'D');
+      _sendChatSbMsgPayload(
+        normalizedTo,
+        [...utf8.encode(mimeHeaders), ...chunk],
+        msgFlag: 'D',
+      );
       // Yield between chunks to let the SB relay flush and avoid
       // overwhelming the peer.  30 ms matches WLM 2009's observed pace.
       await Future<void>.delayed(const Duration(milliseconds: 30));
@@ -923,7 +947,8 @@ class MsnpClient {
     }
     _ftDataAckCompleters.remove(dataBaseId);
 
-    if (_sbReady && _sbSocket != null && ftSession != null) {
+    final conn = _chatSbs[normalizedTo];
+    if (conn != null && conn.ready && conn.socket != null && ftSession != null) {
       final byeSlp = [
         'BYE MSNMSGR:$normalizedTo MSNSLP/1.0',
         'To: <msnmsgr:$normalizedTo>',
@@ -943,7 +968,8 @@ class MsnpClient {
           'Content-Type: application/x-msnmsgrp2p\r\n'
           'P2P-Dest: $normalizedTo\r\n'
           'P2P-Src: $_email\r\n\r\n';
-      _sendSbMsgPayload(
+      _sendChatSbMsgPayload(
+        normalizedTo,
         [...utf8.encode(mimeBye), ...byePayload],
         debugLabel: 'File BYE → $normalizedTo session=$sessionId',
         msgFlag: 'D',
@@ -1016,9 +1042,8 @@ class MsnpClient {
   Future<void> disconnect() async {
     cancelReconnect();
     _stopKeepAlive();
-    _stopSbQueueWatchdog();
     _destroyAllAvatarSbs();
-    await _disconnectSwitchboard();
+    _destroyAllChatSbs();
     if (_socket != null) {
       _send(MsnpCommands.out());
       await _socket!.close();
@@ -1030,9 +1055,9 @@ class MsnpClient {
   void dispose() {
     cancelReconnect();
     _stopKeepAlive();
-    _stopSbQueueWatchdog();
     _destroyAllAvatarSbs();
-    unawaited(_disconnectSwitchboard());
+    _destroyAllChatSbs();
+    _chatSbEvictionTimer?.cancel();
     _socket?.destroy();
     _eventController.close();
     _statusController.close();
@@ -1091,10 +1116,20 @@ class MsnpClient {
       return;
     }
 
-    _sbIsSilentAvatarSession = false;
-
-    if (_sbReady && _sbSocket != null && _sbContactEmail == normalizedTo) {
-      _sendSbMsgPayload(payloadBytes, debugLabel: debugLabel, msgFlag: msgFlag);
+    // If there's already an open, ready SB for this contact, send immediately.
+    final conn = _chatSbs[normalizedTo];
+    if (conn != null && conn.ready && conn.socket != null) {
+      final trId = conn.sendMsgPayload(payloadBytes, msgFlag: msgFlag);
+      if (debugLabel != null) {
+        _logTx('[SB:$normalizedTo] MSG $trId $msgFlag ${payloadBytes.length}\r\n$debugLabel');
+      }
+      if (msgFlag.toUpperCase() == 'A') {
+        conn.pendingAcks[trId] = normalizedTo;
+      }
+      if (fallbackToNotificationServer) {
+        _bumpChatSbSendWatchdog(normalizedTo);
+      }
+      conn.lastActivity = DateTime.now();
       return;
     }
 
@@ -1106,60 +1141,53 @@ class MsnpClient {
       fallbackToNotificationServer: fallbackToNotificationServer,
     );
 
+    // Ensure a _ChatSbConn stub exists for queueing messages.
+    final target = _chatSbs.putIfAbsent(
+      normalizedTo,
+      () => _ChatSbConn(contactEmail: normalizedTo),
+    );
+
     // Chat messages (non-'D') get priority over binary P2P data to avoid
     // noticeable input lag when a large file or avatar transfer is in
     // progress.  Insert them before the first P2P-flagged entry.
     if (msgFlag.toUpperCase() != 'D') {
-      final firstP2p = _sbOutboundQueue.indexWhere(
+      final firstP2p = target.outboundQueue.indexWhere(
         (m) => m.msgFlag.toUpperCase() == 'D',
       );
       if (firstP2p >= 0) {
-        _sbOutboundQueue.insert(firstP2p, msg);
+        target.outboundQueue.insert(firstP2p, msg);
       } else {
-        _sbOutboundQueue.add(msg);
+        target.outboundQueue.add(msg);
       }
     } else {
-      _sbOutboundQueue.add(msg);
+      target.outboundQueue.add(msg);
     }
-    _ensureOutboundSwitchboard(normalizedTo);
+    _ensureOutboundChatSb(normalizedTo);
   }
 
-  void _ensureOutboundSwitchboard(String recipient) {
-    if (_sbConnecting || _sbAwaitingXfr) {
-      return;
-    }
+  void _ensureOutboundChatSb(String recipient) {
+    final conn = _chatSbs[recipient];
 
-    if (_sbSocket != null && _sbContactEmail == recipient) {
-      return;
-    }
+    // Already connecting or ready — nothing to do.
+    if (conn != null && (conn.connecting || conn.ready)) return;
 
-    // Guard against a duplicate XFR for the same recipient (can happen when
-    // _tryNextPendingAvatar fires from multiple sources in quick succession).
+    // XFR already requested for this contact.
+    if (_chatSbPendingXfr.contains(recipient)) return;
+
+    // Guard against a duplicate XFR for the same recipient.
     if (_pendingXfrRequests.containsValue(recipient)) {
       _log('XFR already pending for $recipient — skipping duplicate request.');
       return;
     }
 
-    _sbPendingRecipient = recipient;
-    _sbAwaitingXfr = true;
-    _sbXfrTimeout?.cancel();
-    _sbXfrTimeout = Timer(const Duration(seconds: 8), () {
-      _log('XFR response timeout for $recipient — resetting.');
-      _sbAwaitingXfr = false;
-      _pendingXfrRequests.removeWhere((_, v) => v == recipient);
-    });
+    _chatSbPendingXfr.add(recipient);
     final trId = _nextTrId();
     _pendingXfrRequests[trId] = recipient;
     _send('XFR $trId SB\r\n');
     _log('Requested switchboard endpoint for recipient $recipient.');
   }
 
-  int _nextSbTrId() {
-    _sbTrId += 1;
-    return _sbTrId;
-  }
-
-  Future<void> _connectSwitchboard({
+  Future<void> _connectChatSb({
     required String host,
     required int port,
     required String authToken,
@@ -1167,166 +1195,177 @@ class MsnpClient {
     required String sessionId,
     required String contactEmail,
   }) async {
-    _sbConnecting = true;
+    final norm = contactEmail.trim().toLowerCase();
+
+    // Ensure a conn object exists in the map.
+    var conn = _chatSbs[norm];
+    if (conn == null) {
+      conn = _ChatSbConn(contactEmail: norm);
+      _chatSbs[norm] = conn;
+    }
+    conn.connecting = true;
 
     try {
-      await _disconnectSwitchboard();
+      // Tear down existing socket for this contact if any.
+      _disconnectChatSb(norm, keepEntry: true);
 
-      _sbHost = host;
-      _sbPort = port;
-      _sbAuthToken = authToken;
-      _sbSessionId = sessionId;
-      _sbContactEmail = contactEmail.toLowerCase();
-      _sbParticipants.clear();
-      _sbIsInviteMode = inviteMode;
-      if (!inviteMode && _sbPendingRecipient != null) {
-        _sbIsSilentAvatarSession = _avatarInvitePending.contains(
-          _sbPendingRecipient!,
-        );
-      }
-      _sbReady = false;
-      _sbTrId = 0;
-      _sbPendingFrame = null;
-      _sbRxBuffer.clear();
+      conn.connecting = true;
+      conn.host = host;
+      conn.port = port;
+      conn.authToken = authToken;
+      conn.sessionId = sessionId;
+      conn.participants.clear();
+      conn.isInviteMode = inviteMode;
+      conn.ready = false;
+      conn._trId = 0;
+      conn.pendingFrame = null;
+      conn.rxBuffer.clear();
 
-      _log(
-        'Connecting switchboard socket to $host:$port for ${_sbContactEmail!}.',
-      );
-      _sbSocket = await Socket.connect(
+      _log('Connecting chat SB to $host:$port for $norm.');
+
+      // Evict idle SBs if we're at the limit (skip the one we're about to connect).
+      _evictIdleChatSbs(exclude: norm);
+
+      conn.socket = await Socket.connect(
         host,
         port,
         timeout: ServerConfig.connectTimeout,
       );
-      _sbSocket!.listen(
-        _onSbData,
-        onDone: _onSbDone,
-        onError: _onSbError,
+      conn.socket!.listen(
+        (data) => _onChatSbData(norm, data),
+        onDone: () => _onChatSbDone(norm),
+        onError: (e) => _onChatSbError(norm, e),
         cancelOnError: false,
       );
 
       if (inviteMode) {
-        _sendSb('ANS ${_nextSbTrId()} $_email $authToken $sessionId\r\n');
+        conn.send('ANS ${conn.nextTrId()} $_email $authToken $sessionId\r\n');
       } else {
-        _sendSb('USR ${_nextSbTrId()} $_email $authToken\r\n');
+        conn.send('USR ${conn.nextTrId()} $_email $authToken\r\n');
       }
     } on Object catch (error) {
-      _log('Failed to connect switchboard socket: $error');
-      _sbReady = false;
+      _log('Failed to connect chat SB for $norm: $error');
+      conn.ready = false;
     } finally {
-      _sbConnecting = false;
+      conn.connecting = false;
+      _chatSbPendingXfr.remove(norm);
     }
   }
 
-  Future<void> _disconnectSwitchboard() async {
+  void _disconnectChatSb(String email, {bool keepEntry = false}) {
+    final conn = _chatSbs[email];
+    if (conn == null) return;
     try {
-      if (_sbSocket != null) {
-        _sbSocket!.destroy();
-      }
-    } finally {
-      _cancelSbJoinTimeout();
-      _sbXfrTimeout?.cancel();
-      _sbXfrTimeout = null;
-      _sbSocket = null;
-      _sbPendingFrame = null;
-      _sbRxBuffer.clear();
-      _sbReady = false;
-      _sbConnecting = false;
-      _sbIsInviteMode = false;
-      _sbIsSilentAvatarSession = false;
-      _sbSessionId = null;
-      _sbAuthToken = null;
-      _sbHost = null;
-      _sbPort = null;
-      _sbContactEmail = null;
-      _sbParticipants.clear();
+      conn.send('OUT\r\n');
+    } catch (_) {}
+    conn.destroy();
+    if (!keepEntry) {
+      _chatSbs.remove(email);
     }
   }
 
-  void _sendSb(String command) {
-    _logTx('[SB] $command');
-    final socket = _sbSocket;
-    if (socket == null) {
-      return;
+  /// Destroy all chat SBs (e.g. on disconnect/reconnect).
+  void _destroyAllChatSbs() {
+    for (final conn in _chatSbs.values) {
+      try {
+        conn.send('OUT\r\n');
+      } catch (_) {}
+      conn.destroy();
     }
-    try {
-      socket.add(utf8.encode(command));
-    } on SocketException catch (error) {
-      _log('Send failed on SB socket: $error');
-      _sbSocket = null;
-      _sbReady = false;
-    } catch (error) {
-      _log('Unexpected SB send failure: $error');
-      _sbSocket = null;
-      _sbReady = false;
+    _chatSbs.clear();
+    _chatSbPendingXfr.clear();
+    _chatSbEvictionTimer?.cancel();
+    _chatSbEvictionTimer = null;
+  }
+
+  /// Evicts the oldest idle chat SBs so the pool stays within
+  /// [_maxConcurrentChatSbs].  Connections with pending outbound messages
+  /// or active P2P transfers are kept.  [exclude] is never evicted.
+  void _evictIdleChatSbs({required String exclude}) {
+    if (_chatSbs.length < _maxConcurrentChatSbs) return;
+
+    // Sort entries by lastActivity ascending (oldest first).
+    final candidates = _chatSbs.entries
+        .where((e) =>
+            e.key != exclude &&
+            e.value.outboundQueue.isEmpty &&
+            e.value.p2pInFlightEmail == null)
+        .toList()
+      ..sort((a, b) => a.value.lastActivity.compareTo(b.value.lastActivity));
+
+    while (_chatSbs.length >= _maxConcurrentChatSbs && candidates.isNotEmpty) {
+      final victim = candidates.removeAt(0);
+      _log('Evicting idle chat SB for ${victim.key}');
+      _disconnectChatSb(victim.key);
     }
   }
 
-  void _sendSbMsgPayload(
+  /// Send a MSG payload on the chat SB for [email].  Returns the trId.
+  int _sendChatSbMsgPayload(
+    String email,
     List<int> payloadBytes, {
     String? debugLabel,
     String msgFlag = 'N',
   }) {
-    final flag = (msgFlag.toUpperCase() == 'D') ? 'D' : 'N';
-    final commandStr = 'MSG ${_nextSbTrId()} $flag ${payloadBytes.length}\r\n';
+    final conn = _chatSbs[email];
+    if (conn == null || conn.socket == null) return 0;
+    final upper = msgFlag.toUpperCase();
+    final flag = (upper == 'D') ? 'D' : (upper == 'A') ? 'A' : 'N';
+    final trId = conn.sendMsgPayload(payloadBytes, msgFlag: flag);
     if (debugLabel != null && debugLabel.isNotEmpty) {
-      _logTx('[SB] $commandStr$debugLabel');
+      _logTx('[SB:$email] MSG $trId $flag ${payloadBytes.length}\r\n$debugLabel');
     } else {
-      _logTx('[SB] $commandStr<binary:${payloadBytes.length}>');
+      _logTx('[SB:$email] MSG $trId $flag <binary:${payloadBytes.length}>');
     }
-    final socket = _sbSocket;
-    if (socket == null) {
-      return;
-    }
-    try {
-      socket.add(utf8.encode(commandStr));
-      socket.add(payloadBytes);
-    } on SocketException catch (error) {
-      _log('Send failed on SB MSG payload: $error');
-      _sbSocket = null;
-      _sbReady = false;
-    } catch (error) {
-      _log('Unexpected SB MSG send failure: $error');
-      _sbSocket = null;
-      _sbReady = false;
-    }
+    conn.lastActivity = DateTime.now();
+    return trId;
   }
 
-  void _onSbData(List<int> data) {
-    _sbRxBuffer.addAll(data);
+  void _onChatSbData(String email, List<int> data) {
+    final conn = _chatSbs[email];
+    if (conn == null) return;
+
+    // Any data from the SB server resets the send watchdog — the SB is alive.
+    conn.sendWatchdog?.cancel();
+    conn.sendWatchdog = null;
+    conn.unackedTextSinceRx = 0;
+    conn.lastActivity = DateTime.now();
+
+    conn.rxBuffer.addAll(data);
 
     while (true) {
-      if (_sbPendingFrame != null) {
-        final pending = _sbPendingFrame!;
-        if (_sbRxBuffer.length < pending.length) {
+      if (conn.pendingFrame != null) {
+        final pending = conn.pendingFrame!;
+        if (conn.rxBuffer.length < pending.length) {
           return;
         }
 
-        final payloadBytes = _sbRxBuffer.sublist(0, pending.length);
-        _sbRxBuffer.removeRange(0, pending.length);
+        final payloadBytes = conn.rxBuffer.sublist(0, pending.length);
+        conn.rxBuffer.removeRange(0, pending.length);
         final payload = utf8.decode(payloadBytes, allowMalformed: true);
-        _handleSbPayload(pending, payload, payloadBytes);
-        _sbPendingFrame = null;
-        _trimLeadingSbCrlf();
+        _handleChatSbPayload(email, pending, payload, payloadBytes);
+        conn.pendingFrame = null;
+        _trimLeadingCrlf(conn.rxBuffer);
         continue;
       }
 
-      final splitIndex = _indexOfCrlf(_sbRxBuffer);
+      final splitIndex = _indexOfCrlf(conn.rxBuffer);
       if (splitIndex == -1) {
         return;
       }
 
-      final lineBytes = _sbRxBuffer.sublist(0, splitIndex);
-      _sbRxBuffer.removeRange(0, splitIndex + 2);
+      final lineBytes = conn.rxBuffer.sublist(0, splitIndex);
+      conn.rxBuffer.removeRange(0, splitIndex + 2);
       final line = utf8.decode(lineBytes, allowMalformed: true);
       if (line.isEmpty) {
         continue;
       }
 
-      _logRx('[SB] $line');
+      _logRx('[SB:$email] $line');
       final pendingLength = _extractPayloadLength(line);
       if (pendingLength != null) {
-        _handleSbLine(line);
-        _sbPendingFrame = _PendingFrame.fromHeader(
+        _handleChatSbLine(email, line);
+        conn.pendingFrame = _PendingFrame.fromHeader(
           headerLine: line,
           length: pendingLength,
           defaultTo: _email,
@@ -1334,11 +1373,14 @@ class MsnpClient {
         continue;
       }
 
-      _handleSbLine(line);
+      _handleChatSbLine(email, line);
     }
   }
 
-  void _handleSbLine(String line) {
+  void _handleChatSbLine(String contactEmail, String line) {
+    final conn = _chatSbs[contactEmail];
+    if (conn == null) return;
+
     final parts = line.trim().split(' ');
     if (parts.isEmpty) {
       return;
@@ -1346,11 +1388,10 @@ class MsnpClient {
 
     final command = parts.first.toUpperCase();
     if (command == 'JOI' && parts.length > 1) {
-      _cancelSbJoinTimeout();
+      conn.joinTimeout?.cancel();
+      conn.joinTimeout = null;
       final email = parts[1].toLowerCase();
-      _sbParticipants.add(email);
-      // Keep _sbContactEmail as the primary (first) contact for 1:1 routing.
-      _sbContactEmail ??= email;
+      conn.participants.add(email);
       if (email.contains('@')) {
         _rememberContact(
           email: email,
@@ -1358,21 +1399,21 @@ class MsnpClient {
           status: PresenceStatus.online,
         );
         _eventController.add(
-          MsnpEvent(type: MsnpEventType.system, command: 'SBJOIN', from: email),
+          MsnpEvent(type: MsnpEventType.system, command: 'SBJOIN', from: email, to: contactEmail),
         );
       }
-      _sbReady = true;
-      _flushSbQueue();
+      conn.ready = true;
+      _flushChatSbQueue(contactEmail);
       _trySendPendingAvatarInviteFor(email);
       return;
     }
 
     if (command == 'IRO' && parts.length > 4) {
-      _cancelSbJoinTimeout();
+      conn.joinTimeout?.cancel();
+      conn.joinTimeout = null;
       // IRO format: IRO trId index total email [friendlyname]
       final email = parts[4].toLowerCase();
-      _sbParticipants.add(email);
-      _sbContactEmail ??= email;
+      conn.participants.add(email);
       if (email.contains('@')) {
         _rememberContact(
           email: email,
@@ -1383,38 +1424,85 @@ class MsnpClient {
           const MsnpEvent(type: MsnpEventType.system, command: 'SBPRES'),
         );
       }
-      if (_sbIsInviteMode) {
-        _sbReady = true;
-        _flushSbQueue();
+      if (conn.isInviteMode) {
+        conn.ready = true;
+        _flushChatSbQueue(contactEmail);
         _trySendPendingAvatarInviteFor(email);
       }
       return;
     }
 
     if (command == 'ANS' || command == 'USR') {
-      if (command == 'ANS' && _sbIsInviteMode) {
-        _sbReady = true;
-        _flushSbQueue();
+      if (command == 'ANS' && conn.isInviteMode) {
+        conn.ready = true;
+        _flushChatSbQueue(contactEmail);
         return;
       }
 
-      _sbReady = false;
-      if (command == 'USR' && !_sbIsInviteMode && _sbPendingRecipient != null) {
-        _sendSb('CAL ${_nextSbTrId()} ${_sbPendingRecipient!}\r\n');
-        if (_sbIsSilentAvatarSession) {
-          _startSbJoinTimeout(_sbPendingRecipient!);
+      conn.ready = false;
+      if (command == 'USR' && !conn.isInviteMode) {
+        conn.send('CAL ${conn.nextTrId()} $contactEmail\r\n');
+        _startChatSbJoinTimeout(contactEmail);
+      }
+      return;
+    }
+
+    // ── ACK — server confirmed receipt of our MSG ─────────────────
+    if (command == 'ACK' && parts.length > 1) {
+      final trId = int.tryParse(parts[1]);
+      if (trId != null) {
+        conn.pendingAcks.remove(trId);
+      }
+      return;
+    }
+
+    // ── NAK — server could not deliver our MSG ──────────────────
+    if (command == 'NAK' && parts.length > 1) {
+      final trId = int.tryParse(parts[1]);
+      if (trId != null) {
+        final recipient = conn.pendingAcks.remove(trId);
+        _log('NAK for trId=$trId recipient=$recipient — message not delivered');
+        if (recipient != null) {
+          _eventController.add(MsnpEvent(
+            type: MsnpEventType.system,
+            command: 'MSGNAK',
+            from: recipient,
+            body: 'trId=$trId',
+          ));
         }
       }
+      // NAK means the peer can't receive — tear down this SB.
+      _log('Tearing down SB[$contactEmail] after NAK — peer unreachable.');
+      final remaining = conn.pendingAcks.length;
+      if (remaining > 0) {
+        _eventController.add(MsnpEvent(
+          type: MsnpEventType.system,
+          command: 'SBSTALE',
+          from: contactEmail,
+          body: '$remaining',
+        ));
+      }
+      _disconnectChatSb(contactEmail);
       return;
     }
 
     if (command == 'BYE' && parts.length > 1) {
       final who = parts[1].toLowerCase();
-      _log('Switchboard peer left session: $who');
-      _sbParticipants.remove(who);
-      // Only kill the session when ALL participants have left.
-      if (_sbParticipants.isEmpty) {
-        _sbReady = false;
+      _log('SB[$contactEmail] peer left: $who');
+      conn.participants.remove(who);
+      // When ALL participants have left, tear down.
+      if (conn.participants.isEmpty) {
+        if (conn.pendingAcks.isNotEmpty) {
+          final count = conn.pendingAcks.length;
+          _log('BYE emptied SB[$contactEmail] with $count unacked message(s)');
+          _eventController.add(MsnpEvent(
+            type: MsnpEventType.system,
+            command: 'SBSTALE',
+            from: who,
+            body: '$count',
+          ));
+        }
+        _disconnectChatSb(contactEmail);
       }
       if (who.contains('@')) {
         _rememberContact(
@@ -1423,13 +1511,14 @@ class MsnpClient {
           status: PresenceStatus.appearOffline,
         );
         _eventController.add(
-          MsnpEvent(type: MsnpEventType.system, command: 'SBLEAVE', from: who),
+          MsnpEvent(type: MsnpEventType.system, command: 'SBLEAVE', from: who, to: contactEmail),
         );
       }
     }
   }
 
-  void _handleSbPayload(
+  void _handleChatSbPayload(
+    String sbEmail,
     _PendingFrame frame,
     String payload,
     List<int> payloadBytes,
@@ -1438,7 +1527,7 @@ class MsnpClient {
       return;
     }
 
-    final from = (frame.from ?? _sbContactEmail ?? 'unknown').toLowerCase();
+    final from = (frame.from ?? sbEmail).toLowerCase();
     print(
       '[MSNSLP][SB-RX] MSG from=$from len=${payloadBytes.length} isP2p=${_slpService.isP2pPayloadBytes(payloadBytes)}',
     );
@@ -1506,7 +1595,8 @@ class MsnpClient {
               'P2P-Dest: $from\r\n'
               'P2P-Src: $_email\r\n\r\n';
           final ackPayload = <int>[...utf8.encode(mimeHeaders), ...ackBytes];
-          _sendSbMsgPayload(
+          _sendChatSbMsgPayload(
+            sbEmail,
             ackPayload,
             debugLabel: 'P2P ACK flags=0x02 ackSess=${frameInfo.sessionId}',
             msgFlag: 'D',
@@ -1573,7 +1663,8 @@ class MsnpClient {
               'Content-Type: application/x-msnmsgrp2p\r\n'
               'P2P-Dest: $from\r\n'
               'P2P-Src: $_email\r\n\r\n';
-          _sendSbMsgPayload(
+          _sendChatSbMsgPayload(
+            sbEmail,
             [...utf8.encode(mimeHeaders), ...ackBytes],
             debugLabel: 'ACK close sub-stream session=${frameInfo.sessionId}',
             msgFlag: 'D',
@@ -1632,7 +1723,7 @@ class MsnpClient {
                   _avatarStallTimers.remove(normFrom);
                   // Close the leaked P2P session so the buffer doesn't linger.
                   _p2pSessionManager.closeSession(stallSessionId);
-                  _clearP2pInFlight(normFrom);
+                  _clearChatSbP2pInFlight(normFrom);
                   // Re-queue for retry instead of permanently failing — the peer
                   // may have just been slow.
                   _avatarInvitePending.add(normFrom);
@@ -1667,7 +1758,8 @@ class MsnpClient {
                 'P2P-Dest: $from\r\n'
                 'P2P-Src: $_email\r\n\r\n';
             final ackPayload = <int>[...utf8.encode(mimeHeaders), ...ackBytes];
-            _sendSbMsgPayload(
+            _sendChatSbMsgPayload(
+              sbEmail,
               ackPayload,
               debugLabel:
                   'P2P data-complete ACK session=${frameInfo.sessionId}',
@@ -1691,8 +1783,11 @@ class MsnpClient {
             );
             // Cancel the 200 OK wait-timer — we got the response.  Keep the
             // in-flight lock active until the actual data transfer completes.
-            _sbP2pResponseTimeout?.cancel();
-            _sbP2pResponseTimeout = null;
+            final _p2pConn = _chatSbs[sbEmail];
+            if (_p2pConn != null) {
+              _p2pConn.p2pResponseTimeout?.cancel();
+              _p2pConn.p2pResponseTimeout = null;
+            }
             print(
               '[MSNSLP] 200 OK received from $from — proceeding to data transfer',
             );
@@ -1729,7 +1824,8 @@ class MsnpClient {
                 ...utf8.encode(ackMimeHeaders),
                 ...slpAckBinary,
               ];
-              _sendSbMsgPayload(
+              _sendChatSbMsgPayload(
+                sbEmail,
                 slpAckPayload,
                 debugLabel:
                     'SLP text ACK to $from callId=${inviteParams.callId}',
@@ -1809,49 +1905,58 @@ class MsnpClient {
       return;
     }
 
-    final event = MsnpParser.parseMsgPayload(
+    var event = MsnpParser.parseMsgPayload(
       from: from,
       to: _email,
       payload: payload,
     );
+    // Attach the SB connection key so consumers can look up group/participants.
+    if (sbEmail != from) {
+      event = MsnpEvent(
+        type: event.type,
+        command: event.command,
+        from: event.from,
+        to: event.to,
+        body: event.body,
+        presence: event.presence,
+        raw: 'sbKey:$sbEmail',
+      );
+    }
     _eventController.add(event);
   }
 
-  void _flushSbQueue() {
-    if (!_sbReady || _sbSocket == null) {
-      return;
-    }
-
-    final activePeer = _sbContactEmail;
-    if (activePeer == null || activePeer.isEmpty) {
+  void _flushChatSbQueue(String email) {
+    final conn = _chatSbs[email];
+    if (conn == null || !conn.ready || conn.socket == null) {
       return;
     }
 
     final sent = <_PendingOutboundMessage>[];
-    for (final pending in _sbOutboundQueue) {
-      if (pending.to != activePeer) {
-        continue;
-      }
-      _sendSbMsgPayload(
+    for (final pending in conn.outboundQueue) {
+      final trId = _sendChatSbMsgPayload(
+        email,
         pending.payloadBytes,
         debugLabel: pending.debugLabel,
         msgFlag: pending.msgFlag,
       );
+      if (pending.msgFlag.toUpperCase() == 'A') {
+        conn.pendingAcks[trId] = pending.to;
+      }
+      if (pending.fallbackToNotificationServer) {
+        _bumpChatSbSendWatchdog(email);
+      }
       sent.add(pending);
     }
     for (final item in sent) {
-      _sbOutboundQueue.remove(item);
+      conn.outboundQueue.remove(item);
     }
-
-    // Keep this switchboard pinned to the active peer until server closes it.
-    // Remaining recipients are handled on next SB session from _onSbDone.
   }
 
-  void _trimLeadingSbCrlf() {
-    while (_sbRxBuffer.length >= 2 &&
-        _sbRxBuffer[0] == 13 &&
-        _sbRxBuffer[1] == 10) {
-      _sbRxBuffer.removeRange(0, 2);
+  void _trimLeadingCrlf(List<int> buffer) {
+    while (buffer.length >= 2 &&
+        buffer[0] == 13 &&
+        buffer[1] == 10) {
+      buffer.removeRange(0, 2);
     }
   }
 
@@ -1862,36 +1967,11 @@ class MsnpClient {
       return;
     }
 
-    // RNG is an incoming switchboard request from a peer (e.g. to request our
-    // avatar or send us messages).  We should accept it even if the main SB
-    // is busy.  Avatar transfers now run on dedicated SBs and are NOT
-    // interrupted by RNG.
-    if (_sbAwaitingXfr || _sbConnecting) {
-      _log('Accepting RNG from ${parts[5]} — tearing down pending main SB.');
-      _sbAwaitingXfr = false;
-      _sbXfrTimeout?.cancel();
-      _sbXfrTimeout = null;
-      _cancelSbJoinTimeout();
-      _handledAvatarSessionIds.clear();
-      _sbSocket?.destroy();
-      _sbSocket = null;
-      _sbReady = false;
-      _sbConnecting = false;
-      _sbIsSilentAvatarSession = false;
-      _sbAuthToken = null;
-      _sbHost = null;
-      _sbPort = null;
-      _sbSessionId = null;
-      _sbContactEmail = null;
-      _sbPendingRecipient = null;
-      _sbPendingFrame = null;
-      _sbRxBuffer.clear();
-    }
-
+    final contactEmail = parts[5].toLowerCase();
     final sessionId = parts[1];
     final hostPort = parts[2];
     final authToken = parts[4];
-    final contactEmail = parts[5].toLowerCase();
+
     _rememberContact(
       email: contactEmail,
       displayName: contactEmail,
@@ -1900,12 +1980,12 @@ class MsnpClient {
     _eventController.add(
       const MsnpEvent(type: MsnpEventType.system, command: 'SBPRES'),
     );
+
     final hostParts = hostPort.split(':');
     if (hostParts.length != 2) {
       _log('RNG host:port invalid: $hostPort');
       return;
     }
-
     final host = hostParts[0];
     final port = int.tryParse(hostParts[1]);
     if (port == null) {
@@ -1913,8 +1993,15 @@ class MsnpClient {
       return;
     }
 
+    // Multi-SB: if there's already an SB for this contact, tear it down and
+    // replace.  Other contacts' SBs are unaffected.
+    if (_chatSbs.containsKey(contactEmail)) {
+      _log('RNG from $contactEmail — replacing existing SB.');
+      _disconnectChatSb(contactEmail);
+    }
+
     unawaited(
-      _connectSwitchboard(
+      _connectChatSb(
         host: host,
         port: port,
         authToken: authToken,
@@ -1928,7 +2015,6 @@ class MsnpClient {
   void _handleXfr(String line) {
     final parts = line.trim().split(' ');
     if (parts.length < 6) {
-      _sbAwaitingXfr = false;
       _log('Received malformed XFR: $line');
       return;
     }
@@ -1939,11 +2025,11 @@ class MsnpClient {
       return;
     }
 
+    // Cancel avatar XFR timeout if this was an avatar request.
+    _avatarXfrTimeouts.remove(trId)?.cancel();
+
     if (parts[2].toUpperCase() != 'SB') {
       _pendingXfrRequests.remove(trId);
-      if (_pendingXfrRequests.isEmpty) {
-        _sbAwaitingXfr = false;
-      }
       return;
     }
 
@@ -1952,25 +2038,20 @@ class MsnpClient {
     final hostParts = hostPort.split(':');
     final recipient = _pendingXfrRequests.remove(trId);
     if (hostParts.length != 2 || recipient == null || recipient.isEmpty) {
-      if (_pendingXfrRequests.isEmpty) {
-        _sbAwaitingXfr = false;
-      }
       _log('Unable to use XFR for switchboard: $line');
       return;
     }
 
     final port = int.tryParse(hostParts[1]);
     if (port == null) {
-      if (_pendingXfrRequests.isEmpty) {
-        _sbAwaitingXfr = false;
-      }
       _pendingAvatarXfrs.remove(trId);
+      _chatSbPendingXfr.remove(recipient);
       _log('XFR provided invalid port: $hostPort');
       return;
     }
 
     // Route to the dedicated avatar SB pool if this XFR was requested for an
-    // avatar transfer, otherwise to the main chat switchboard.
+    // avatar transfer, otherwise to the chat SB for the recipient.
     if (_pendingAvatarXfrs.remove(trId)) {
       unawaited(
         _connectAvatarSb(
@@ -1981,12 +2062,9 @@ class MsnpClient {
         ),
       );
     } else {
-      _sbPendingRecipient = recipient;
-      _sbAwaitingXfr = false;
-      _sbXfrTimeout?.cancel();
-      _sbXfrTimeout = null;
+      _chatSbPendingXfr.remove(recipient);
       unawaited(
-        _connectSwitchboard(
+        _connectChatSb(
           host: hostParts[0],
           port: port,
           authToken: authToken,
@@ -1998,167 +2076,144 @@ class MsnpClient {
     }
   }
 
-  void _onSbDone() {
-    _log('Switchboard socket closed by remote endpoint.');
-    _cancelSbJoinTimeout();
-    _handledAvatarSessionIds.clear();
-    final closedEmail = _sbContactEmail;
-    _sbSocket = null;
-    _sbPendingFrame = null;
-    _sbRxBuffer.clear();
-    _sbReady = false;
-    _sbConnecting = false;
-    _sbIsSilentAvatarSession = false;
-    _sbIsInviteMode = false;
-
-    // Immediately fail any active incoming file transfers on this SB.
-    if (closedEmail != null) {
-      _fileTransferService.failActiveSessionsForPeer(closedEmail);
+  /// Increments the watchdog counter and starts the 15 s timer if needed.
+  void _bumpChatSbSendWatchdog(String email) {
+    final conn = _chatSbs[email];
+    if (conn == null) return;
+    conn.unackedTextSinceRx++;
+    if (conn.sendWatchdog == null) {
+      conn.sendWatchdog = Timer(
+        const Duration(seconds: 15),
+        () => _onChatSbSendWatchdog(email),
+      );
     }
+  }
 
-    // If the SB that just closed was carrying a P2P transfer, re-queue it
-    // for retry (up to 2 times) instead of permanently failing.
-    if (closedEmail != null && _sbP2pInFlightEmail == closedEmail) {
-      // Close any active P2P sessions for this peer so the "Downloading..."
-      // status is cleared from the UI.
-      _p2pSessionManager.closeAllSessionsForPeer(closedEmail);
-      _clearP2pInFlight(closedEmail);
+  void _onChatSbSendWatchdog(String email) {
+    final conn = _chatSbs[email];
+    if (conn == null) return;
+    conn.sendWatchdog = null;
+    if (conn.unackedTextSinceRx >= 2 && conn.socket != null) {
+      _log(
+        'SB[$email] send watchdog: ${conn.unackedTextSinceRx} texts sent with '
+        'no server response for 15s — tearing down stale SB.',
+      );
+      final count = conn.unackedTextSinceRx;
+      _disconnectChatSb(email);
+      _eventController.add(
+        MsnpEvent(
+          type: MsnpEventType.system,
+          command: 'SBSTALE',
+          from: email,
+          body: '$count',
+        ),
+      );
+    }
+  }
 
-      final retries = _avatarSbRetryCount[closedEmail] ?? 0;
-      if (retries < 5) {
-        _avatarSbRetryCount[closedEmail] = retries + 1;
-        _log(
-          'SB closed while P2P in-flight for $closedEmail — '
-          're-queuing (retry ${retries + 1}/5).',
-        );
-        _avatarInvitePending.add(closedEmail);
-        _avatarInviteSent.removeWhere((k) => k.startsWith('$closedEmail|'));
-        _avatarSilentRequested.removeWhere(
-          (k) => k.startsWith('$closedEmail|'),
-        );
-        _tryNextPendingAvatar();
-      } else {
-        _log(
-          'SB closed while P2P in-flight for $closedEmail — '
-          'max retries reached, marking as failed.',
-        );
-        _markAvatarFetchFailed(
-          closedEmail,
-          reason:
-              'SB closed before transfer completed (after $retries retries)',
-        );
-      }
+  void _onChatSbDone(String email) {
+    final conn = _chatSbs[email];
+    // If connecting, this is a stale callback from an old socket being replaced.
+    if (conn != null && conn.connecting) {
+      _log('SB[$email] closed (stale — reconnect in progress).');
       return;
     }
-    if (_socket != null && _sbOutboundQueue.isNotEmpty) {
-      _ensureOutboundSwitchboard(_sbOutboundQueue.first.to);
+    _log('SB[$email] closed by remote endpoint.');
+
+    // Report any text messages that never received ACK.
+    if (conn != null && conn.pendingAcks.isNotEmpty) {
+      final count = conn.pendingAcks.length;
+      _log('SB[$email] closed with $count unacked text message(s)');
+      _eventController.add(MsnpEvent(
+        type: MsnpEventType.system,
+        command: 'SBSTALE',
+        from: email,
+        body: '$count',
+      ));
     }
+
+    // Fail active incoming file transfers on this SB.
+    _fileTransferService.failActiveSessionsForPeer(email);
+
+    // If a P2P transfer was in-flight, re-queue for retry.
+    if (conn?.p2pInFlightEmail == email) {
+      _p2pSessionManager.closeAllSessionsForPeer(email);
+      _clearChatSbP2pInFlight(email);
+      final retries = _avatarSbRetryCount[email] ?? 0;
+      if (retries < 5) {
+        _avatarSbRetryCount[email] = retries + 1;
+        _log('SB[$email] closed while P2P in-flight — re-queuing (retry ${retries + 1}/5).');
+        _avatarInvitePending.add(email);
+        _avatarInviteSent.removeWhere((k) => k.startsWith('$email|'));
+        _avatarSilentRequested.removeWhere((k) => k.startsWith('$email|'));
+      } else {
+        _markAvatarFetchFailed(email, reason: 'SB closed before transfer completed (after $retries retries)');
+      }
+    }
+
+    _disconnectChatSb(email);
     _tryNextPendingAvatar();
   }
 
-  void _onSbError(Object error, StackTrace stackTrace) {
-    _log('Switchboard socket error: $error');
-    _cancelSbJoinTimeout();
-    _handledAvatarSessionIds.clear();
-    final closedEmail = _sbContactEmail;
-    _sbSocket = null;
-    _sbPendingFrame = null;
-    _sbRxBuffer.clear();
-    _sbReady = false;
-    _sbConnecting = false;
-    _sbIsSilentAvatarSession = false;
-    _sbIsInviteMode = false;
+  void _onChatSbError(String email, Object error) {
+    _log('SB[$email] socket error: $error');
 
-    // Immediately fail any active incoming file transfers on this SB.
-    if (closedEmail != null) {
-      _fileTransferService.failActiveSessionsForPeer(closedEmail);
+    final conn = _chatSbs[email];
+    if (conn != null && conn.pendingAcks.isNotEmpty) {
+      final count = conn.pendingAcks.length;
+      _log('SB[$email] error with $count unacked text message(s)');
+      _eventController.add(MsnpEvent(
+        type: MsnpEventType.system,
+        command: 'SBSTALE',
+        from: email,
+        body: '$count',
+      ));
     }
 
-    // Release the P2P in-flight lock so the pipeline doesn't deadlock.
-    if (closedEmail != null && _sbP2pInFlightEmail == closedEmail) {
-      _clearP2pInFlight(closedEmail);
+    _fileTransferService.failActiveSessionsForPeer(email);
 
-      final retries = _avatarSbRetryCount[closedEmail] ?? 0;
+    if (conn?.p2pInFlightEmail == email) {
+      _clearChatSbP2pInFlight(email);
+      final retries = _avatarSbRetryCount[email] ?? 0;
       if (retries < 5) {
-        _avatarSbRetryCount[closedEmail] = retries + 1;
-        _log(
-          'SB error while P2P in-flight for $closedEmail — '
-          're-queuing (retry ${retries + 1}/5).',
-        );
-        _avatarInvitePending.add(closedEmail);
-        _avatarInviteSent.removeWhere((k) => k.startsWith('$closedEmail|'));
-        _avatarSilentRequested.removeWhere(
-          (k) => k.startsWith('$closedEmail|'),
-        );
-        _tryNextPendingAvatar();
+        _avatarSbRetryCount[email] = retries + 1;
+        _log('SB[$email] error while P2P in-flight — re-queuing (retry ${retries + 1}/5).');
+        _avatarInvitePending.add(email);
+        _avatarInviteSent.removeWhere((k) => k.startsWith('$email|'));
+        _avatarSilentRequested.removeWhere((k) => k.startsWith('$email|'));
       } else {
-        _log(
-          'SB error while P2P in-flight for $closedEmail — '
-          'max retries reached.',
-        );
-        _markAvatarFetchFailed(
-          closedEmail,
-          reason: 'SB socket error (after $retries retries)',
-        );
+        _markAvatarFetchFailed(email, reason: 'SB socket error (after $retries retries)');
       }
-      return;
     }
+
+    _disconnectChatSb(email);
     _tryNextPendingAvatar();
   }
 
-  void _startSbJoinTimeout(String contactEmail) {
-    _cancelSbJoinTimeout();
-    _sbJoinTimeoutContact = contactEmail.trim().toLowerCase();
-    _sbJoinTimeoutTimer = Timer(const Duration(seconds: 6), _onSbJoinTimeout);
+  void _startChatSbJoinTimeout(String contactEmail) {
+    final norm = contactEmail.trim().toLowerCase();
+    final conn = _chatSbs[norm];
+    if (conn == null) return;
+    conn.joinTimeout?.cancel();
+    conn.joinTimeout = Timer(const Duration(seconds: 6), () => _onChatSbJoinTimeout(norm));
   }
 
-  void _cancelSbJoinTimeout() {
-    _sbJoinTimeoutTimer?.cancel();
-    _sbJoinTimeoutTimer = null;
-    _sbJoinTimeoutContact = null;
-  }
-
-  void _onSbJoinTimeout() {
-    final failedContact = _sbJoinTimeoutContact;
-    _cancelSbJoinTimeout();
-    if (failedContact == null || failedContact.isEmpty) {
-      return;
-    }
-
-    _markAvatarFetchFailed(
-      failedContact,
-      reason: 'Silent switchboard JOI timeout (no JOI after CAL in 10s)',
-      closeSwitchboard: true,
-    );
+  void _onChatSbJoinTimeout(String email) {
+    final conn = _chatSbs[email];
+    if (conn == null) return;
+    conn.joinTimeout = null;
+    _log('SB[$email] JOI timeout — peer did not join within 6s.');
+    _disconnectChatSb(email);
   }
 
   void _markAvatarFetchFailed(
     String contactEmail, {
     required String reason,
-    bool closeSwitchboard = false,
   }) {
     final failedContact = contactEmail.trim().toLowerCase();
-    if (failedContact.isEmpty) {
-      return;
-    }
+    if (failedContact.isEmpty) return;
 
     _log('Avatar fetch failed for $failedContact: $reason');
-    if (closeSwitchboard) {
-      _sbSocket?.destroy();
-      _sbSocket = null;
-      _sbReady = false;
-      _sbConnecting = false;
-      _sbAwaitingXfr = false;
-      _sbIsInviteMode = false;
-      _sbAuthToken = null;
-      _sbHost = null;
-      _sbPort = null;
-      _sbSessionId = null;
-      _sbContactEmail = null;
-      _sbPendingRecipient = null;
-      _sbPendingFrame = null;
-      _sbRxBuffer.clear();
-    }
 
     _avatarInvitePending.remove(failedContact);
     _avatarBackgroundFailed.add(failedContact);
@@ -2166,11 +2221,6 @@ class MsnpClient {
       (key) => key.startsWith('$failedContact|'),
     );
     _avatarInviteSent.removeWhere((key) => key.startsWith('$failedContact|'));
-
-    _sbOutboundQueue.removeWhere((item) {
-      final isAvatarP2p = item.msgFlag.toUpperCase() == 'D';
-      return item.to == failedContact && isAvatarP2p;
-    });
 
     _eventController.add(
       MsnpEvent(
@@ -2183,19 +2233,20 @@ class MsnpClient {
     // Tear down dedicated avatar SB if one exists for this contact.
     _destroyAvatarSb(failedContact);
     // Release the in-flight lock and kick off the next pending transfer.
-    _clearP2pInFlight(failedContact);
+    _clearChatSbP2pInFlight(failedContact);
     _tryNextPendingAvatar();
   }
 
-  /// Releases the P2P in-flight lock for [email] and cancels any pending timer.
-  void _clearP2pInFlight(String email) {
-    if (_sbP2pInFlightEmail == email) {
-      _sbP2pResponseTimeout?.cancel();
-      _sbP2pResponseTimeout = null;
-      _sbP2pInFlightEmail = null;
+  /// Releases the P2P in-flight lock for [email] on the per-contact chat SB.
+  void _clearChatSbP2pInFlight(String email) {
+    final conn = _chatSbs[email];
+    if (conn != null && conn.p2pInFlightEmail == email) {
+      conn.p2pResponseTimeout?.cancel();
+      conn.p2pResponseTimeout = null;
+      conn.p2pInFlightEmail = null;
       _avatarStallTimers[email]?.cancel();
       _avatarStallTimers.remove(email);
-      _log('P2P in-flight lock released for $email');
+      _log('Chat SB P2P in-flight lock released for $email');
     }
   }
 
@@ -2231,21 +2282,6 @@ class MsnpClient {
         eagerBackground: true,
       );
     }
-
-    // Avatar queue drained — process any RNG invitations that were deferred.
-    if (_avatarSbs.isEmpty) {
-      _drainDeferredRng();
-    }
-  }
-
-  /// Replays deferred RNG lines now that the avatar pipeline is idle.
-  void _drainDeferredRng() {
-    if (_deferredRngLines.isEmpty) return;
-    // Take the most recent RNG only — older sessions may have expired.
-    final line = _deferredRngLines.removeLast();
-    _deferredRngLines.clear();
-    _log('Replaying deferred RNG after avatar pipeline idle.');
-    _handleRng(line);
   }
 
   /// Called by [_p2pSessionManager] when a display picture is fully reassembled.
@@ -2253,7 +2289,7 @@ class MsnpClient {
     final normalized = peerEmail.trim().toLowerCase();
     _log('P2P avatar ready for $normalized → $filePath');
     // Release the in-flight lock so the next queued contact can start.
-    _clearP2pInFlight(normalized);
+    _clearChatSbP2pInFlight(normalized);
     // Clear the failed/in-flight flags so the new path is picked up.
     _avatarBackgroundFailed.remove(normalized);
     _avatarSbRetryCount.remove(normalized);
@@ -2292,6 +2328,12 @@ class MsnpClient {
     final trId = _nextTrId();
     _pendingXfrRequests[trId] = norm;
     _pendingAvatarXfrs.add(trId);
+    _avatarXfrTimeouts[trId] = Timer(const Duration(seconds: 10), () {
+      _avatarXfrTimeouts.remove(trId);
+      _pendingXfrRequests.remove(trId);
+      _pendingAvatarXfrs.remove(trId);
+      _log('Avatar XFR timeout for $norm (trId=$trId) — cleared pending state.');
+    });
     _send('XFR $trId SB\r\n');
     _log('Requested dedicated avatar SB for $norm (XFR trId=$trId).');
   }
@@ -2505,7 +2547,17 @@ class MsnpClient {
     if (frame.command != 'MSG') return;
     final from = conn.contactEmail;
 
-    if (!_slpService.isP2pPayloadBytes(payloadBytes)) return;
+    // Non-P2P payload = regular chat message sent on this avatar SB.
+    // Forward it to the event stream so it appears in the chat UI.
+    if (!_slpService.isP2pPayloadBytes(payloadBytes)) {
+      final event = MsnpParser.parseMsgPayload(
+        from: from,
+        to: _email,
+        payload: payload,
+      );
+      _eventController.add(event);
+      return;
+    }
 
     final frameInfo = _slpService.parseInboundP2pFrame(payloadBytes);
     if (frameInfo == null) return;
@@ -2691,7 +2743,11 @@ class MsnpClient {
   /// Tears down a single dedicated avatar SB and removes it from the pool.
   void _destroyAvatarSb(String email) {
     final conn = _avatarSbs.remove(email);
-    conn?.destroy();
+    if (conn != null) {
+      // Send OUT so the SB server notifies the peer with BYE.
+      conn.send('OUT\r\n');
+      conn.destroy();
+    }
     _avatarStallTimers[email]?.cancel();
     _avatarStallTimers.remove(email);
   }
@@ -2699,10 +2755,15 @@ class MsnpClient {
   /// Tears down ALL dedicated avatar SBs.
   void _destroyAllAvatarSbs() {
     for (final conn in _avatarSbs.values) {
+      conn.send('OUT\r\n');
       conn.destroy();
     }
     _avatarSbs.clear();
     _pendingAvatarXfrs.clear();
+    for (final timer in _avatarXfrTimeouts.values) {
+      timer.cancel();
+    }
+    _avatarXfrTimeouts.clear();
     for (final timer in _avatarStallTimers.values) {
       timer.cancel();
     }
@@ -2727,7 +2788,7 @@ class MsnpClient {
         _pendingFrame = null;
 
         // CrossTalk sometimes emits an extra separator after payload frames.
-        _trimLeadingCrlf();
+        _trimLeadingCrlf(_rxBuffer);
         continue;
       }
 
@@ -2872,7 +2933,7 @@ class MsnpClient {
     _stopKeepAlive();
     _socket?.destroy();
     _socket = null;
-    unawaited(_disconnectSwitchboard());
+    _destroyAllChatSbs();
     _destroyAllAvatarSbs();
     _statusController.add(ConnectionStatus.disconnected);
   }
@@ -2912,7 +2973,6 @@ class MsnpClient {
             .replaceAll('\n', ' ')
             .replaceAll(RegExp(r'\s+'), ' ')
             .trim();
-        _sbIsInviteMode = false;
         const chunkSize = 420;
         if (compact.length <= chunkSize) {
           _log('Hotmail payload preview: $compact');
@@ -3317,23 +3377,12 @@ class MsnpClient {
     return payloadLength;
   }
 
-  void _trimLeadingCrlf() {
-    while (_rxBuffer.length >= 2 && _rxBuffer[0] == 13 && _rxBuffer[1] == 10) {
-      _rxBuffer.removeRange(0, 2);
-    }
-  }
-
   void _onDone() {
     _stopKeepAlive();
     _socket = null;
-    unawaited(_disconnectSwitchboard());
+    _destroyAllChatSbs();
     _destroyAllAvatarSbs();
-    _sbOutboundQueue.clear();
-    _sbAwaitingXfr = false;
-    _sbPendingRecipient = null;
-    _sbP2pResponseTimeout?.cancel();
-    _sbP2pResponseTimeout = null;
-    _sbP2pInFlightEmail = null;
+    _chatSbPendingXfr.clear();
     if (_activeChallengeTrId != null && !_challengeAcked) {
       _challengeProfileIndex =
           (_challengeProfileIndex + 1) % _challengeProfiles.length;
@@ -3356,14 +3405,9 @@ class MsnpClient {
   void _onError(Object error, StackTrace stackTrace) {
     _stopKeepAlive();
     _socket = null;
-    unawaited(_disconnectSwitchboard());
+    _destroyAllChatSbs();
     _destroyAllAvatarSbs();
-    _sbOutboundQueue.clear();
-    _sbAwaitingXfr = false;
-    _sbP2pResponseTimeout?.cancel();
-    _sbP2pResponseTimeout = null;
-    _sbP2pInFlightEmail = null;
-    _sbPendingRecipient = null;
+    _chatSbPendingXfr.clear();
     _challengeAckTimer?.cancel();
     _challengeAckTimer = null;
     _log('Socket error: $error');
@@ -3392,7 +3436,7 @@ class MsnpClient {
           _stopKeepAlive();
           _socket?.destroy();
           _socket = null;
-          unawaited(_disconnectSwitchboard());
+          _destroyAllChatSbs();
           _destroyAllAvatarSbs();
           _statusController.add(ConnectionStatus.disconnected);
           _scheduleReconnect();
@@ -3447,6 +3491,7 @@ class MsnpClient {
           passportTicket: _passportTicket,
           host: _connectedHost,
           port: _connectedPort,
+          isAutoReconnect: true,
         );
       } catch (e) {
         _log('Auto-reconnect failed: $e');
@@ -3461,33 +3506,6 @@ class MsnpClient {
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     _reconnectAttempts = 0;
-  }
-
-  /// Periodically checks if outbound text messages are stuck in the SB queue.
-  /// If messages have been waiting > 10 seconds while P2P is in-flight, force
-  /// a new SB session by temporarily clearing the P2P guard.
-  void _startSbQueueWatchdog() {
-    _sbQueueWatchdog?.cancel();
-    _sbQueueWatchdog = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (_sbOutboundQueue.isEmpty || _socket == null) return;
-      // Only check text messages (not P2P data frames which have msgFlag 'D')
-      final hasStuckText = _sbOutboundQueue.any(
-        (m) => m.fallbackToNotificationServer && m.msgFlag != 'D',
-      );
-      if (!hasStuckText) return;
-      // If not currently connecting/awaiting XFR, kick a new SB request
-      if (!_sbConnecting && !_sbAwaitingXfr) {
-        final firstText = _sbOutboundQueue.firstWhere(
-          (m) => m.fallbackToNotificationServer && m.msgFlag != 'D',
-        );
-        _ensureOutboundSwitchboard(firstText.to);
-      }
-    });
-  }
-
-  void _stopSbQueueWatchdog() {
-    _sbQueueWatchdog?.cancel();
-    _sbQueueWatchdog = null;
   }
 
   void _updateKeepAliveIntervalFromQng(String line) {
@@ -3670,6 +3688,16 @@ class MsnpClient {
 
     if (event.type == MsnpEventType.presence) {
       if (event.command.toUpperCase() == 'FLN') {
+        // Peer went offline — tear down any active SB to this contact
+        // since the session is now invalid.
+        final normalizedEmail = event.from!.trim().toLowerCase();
+        if (_chatSbs.containsKey(normalizedEmail)) {
+          _log(
+            'Peer $normalizedEmail went offline (FLN) — '
+            'tearing down stale SB.',
+          );
+          _disconnectChatSb(normalizedEmail);
+        }
         _rememberContact(
           email: event.from!,
           status: PresenceStatus.appearOffline,
@@ -3826,6 +3854,13 @@ class MsnpClient {
     );
 
     final normalizedEmail = email.trim().toLowerCase();
+
+    // NOTE: We intentionally do NOT tear down the SB on NLN/ILN presence
+    // changes.  A peer going AWY→NLN (background→foreground) does NOT
+    // invalidate the SB session — both sides still share the same session.
+    // Only FLN (offline) means the peer's SB is truly gone, and that case
+    // is handled in _rememberFromEvent().
+
     // Contact came (back) online — clear any prior avatar-fetch failure so
     // the system retries automatically instead of staying permanently blocked.
     _avatarBackgroundFailed.remove(normalizedEmail);
@@ -3872,7 +3907,10 @@ class MsnpClient {
       _avatarBackgroundFailed.remove(normalizedEmail);
     }
 
-    if (_sbReady && _sbSocket != null && _sbContactEmail == normalizedEmail) {
+    // If a chat SB to this contact is already open, piggyback the avatar
+    // INVITE on it.
+    final chatConn = _chatSbs[normalizedEmail];
+    if (chatConn != null && chatConn.ready && chatConn.socket != null) {
       _trySendPendingAvatarInviteFor(normalizedEmail);
       return;
     }
@@ -3927,7 +3965,8 @@ class MsnpClient {
     required String fullMsnObjectXml,
   }) {
     final normalizedEmail = contactEmail.trim().toLowerCase();
-    if (!_sbReady || _sbSocket == null || _sbContactEmail != normalizedEmail) {
+    final conn = _chatSbs[normalizedEmail];
+    if (conn == null || !conn.ready || conn.socket == null) {
       return false;
     }
 
@@ -3965,7 +4004,6 @@ class MsnpClient {
       ...inviteResult.bytes,
     ];
     // Log the full INVITE SLP text so it can be inspected in debug output.
-    // Decode from the invite bytes: skip 48-byte header, read until 4-byte footer.
     try {
       final rawInvite = inviteResult.bytes;
       if (rawInvite.length > 52) {
@@ -3976,7 +4014,6 @@ class MsnpClient {
         print(
           '[MSNSLP][TX] INVITE SLP for $contactEmail callId=${inviteResult.callId} sessId=${inviteResult.sessionId}:\n$slpPreview',
         );
-        // Hex dump of the 48-byte P2P binary header for wire-level debugging.
         final hdr = rawInvite.sublist(0, 48);
         final hexStr = hdr
             .map((b) => b.toRadixString(16).padLeft(2, '0'))
@@ -3987,19 +4024,20 @@ class MsnpClient {
         );
       }
     } catch (_) {}
-    _sendSbMsgPayload(payloadBytes, debugLabel: mimeHeaders, msgFlag: 'D');
+    _sendChatSbMsgPayload(normalizedEmail, payloadBytes, debugLabel: mimeHeaders, msgFlag: 'D');
     _log(
       'Queued MSNSLP DP INVITE for $contactEmail sha1d=$avatarSha1d callId=${inviteResult.callId}',
     );
     _avatarSilentRequested.remove(dedupeKey);
 
-    // Lock the SB for this contact until the transfer completes or times out.
-    _sbP2pInFlightEmail = normalizedEmail;
-    _sbP2pResponseTimeout?.cancel();
-    _sbP2pResponseTimeout = Timer(const Duration(seconds: 15), () {
-      if (_sbP2pInFlightEmail == normalizedEmail) {
+    // Lock the per-contact SB for avatar transfer tracking.
+    conn.p2pInFlightEmail = normalizedEmail;
+    conn.p2pResponseTimeout?.cancel();
+    conn.p2pResponseTimeout = Timer(const Duration(seconds: 15), () {
+      final c = _chatSbs[normalizedEmail];
+      if (c?.p2pInFlightEmail == normalizedEmail) {
         _log('P2P: 200 OK timeout waiting for $normalizedEmail — giving up.');
-        _clearP2pInFlight(normalizedEmail);
+        _clearChatSbP2pInFlight(normalizedEmail);
         _markAvatarFetchFailed(normalizedEmail, reason: '200 OK timeout');
       }
     });
@@ -4008,9 +4046,10 @@ class MsnpClient {
     _avatarStallTimers[normalizedEmail] = Timer(
       const Duration(seconds: 15),
       () {
-        if (_sbP2pInFlightEmail == normalizedEmail) {
+        final c = _chatSbs[normalizedEmail];
+        if (c?.p2pInFlightEmail == normalizedEmail) {
           _log('P2P: Avatar stall timeout for $normalizedEmail (15s no data).');
-          _clearP2pInFlight(normalizedEmail);
+          _clearChatSbP2pInFlight(normalizedEmail);
           _markAvatarFetchFailed(normalizedEmail, reason: 'stall timeout');
         }
         _avatarStallTimers.remove(normalizedEmail);
@@ -4061,7 +4100,8 @@ class MsnpClient {
           'P2P-Dest: $from\r\n'
           'P2P-Src: $_email\r\n\r\n';
       final payload = <int>[...utf8.encode(mimeHeaders), ...responseBytes];
-      _sendSbMsgPayload(
+      _sendChatSbMsgPayload(
+        from,
         payload,
         debugLabel: 'Transport 200 OK → $from callId=$callId bridge=SBBridge',
         msgFlag: 'D',
@@ -4139,7 +4179,8 @@ class MsnpClient {
             'P2P-Dest: $from\r\n'
             'P2P-Src: $_email\r\n\r\n';
         final payload = <int>[...utf8.encode(mimeHeaders), ...declinePayload];
-        _sendSbMsgPayload(
+        _sendChatSbMsgPayload(
+          from,
           payload,
           debugLabel: 'SLP 603 Decline → $from callId=$callId',
           msgFlag: 'D',
@@ -4282,7 +4323,8 @@ class MsnpClient {
           'Content-Type: application/x-msnmsgrp2p\r\n'
           'P2P-Dest: $from\r\n'
           'P2P-Src: $_email\r\n\r\n';
-      _sendSbMsgPayload(
+      _sendChatSbMsgPayload(
+        from,
         [...utf8.encode(mimeOk), ...okPayload],
         debugLabel:
             'Avatar 200 OK → $from session=$sessionId ackBase=$inviteBaseId',
@@ -4308,7 +4350,8 @@ class MsnpClient {
           'Content-Type: application/x-msnmsgrp2p\r\n'
           'P2P-Dest: $from\r\n'
           'P2P-Src: $_email\r\n\r\n';
-      _sendSbMsgPayload(
+      _sendChatSbMsgPayload(
+        from,
         [...utf8.encode(mimePrep), ...dataPrepPayload],
         debugLabel: 'Avatar data-prep → $from session=$sessionId',
         msgFlag: 'D',
@@ -4341,7 +4384,8 @@ class MsnpClient {
             'Content-Type: application/x-msnmsgrp2p\r\n'
             'P2P-Dest: $from\r\n'
             'P2P-Src: $_email\r\n\r\n';
-        _sendSbMsgPayload(
+        _sendChatSbMsgPayload(
+          from,
           [...utf8.encode(mimeData), ...dataPayload],
           debugLabel: 'Avatar data $offset-$chunkEnd/$totalSize → $from',
           msgFlag: 'D',
@@ -4405,7 +4449,8 @@ class MsnpClient {
         'Content-Type: application/x-msnmsgrp2p\r\n'
         'P2P-Dest: $to\r\n'
         'P2P-Src: $_email\r\n\r\n';
-    _sendSbMsgPayload(
+    _sendChatSbMsgPayload(
+      to,
       [...utf8.encode(mime), ...payload],
       debugLabel: 'SLP 603 Decline → $to callId=$callId',
       msgFlag: 'D',
@@ -5079,5 +5124,102 @@ class _AvatarSbConn {
     pendingFrame = null;
     ready = false;
     connecting = false;
+  }
+}
+
+/// Encapsulates a dedicated SB (switchboard) socket for a single chat
+/// conversation.  Multiple instances run concurrently — one per contact —
+/// stored in [MsnpClient._chatSbs].
+class _ChatSbConn {
+  _ChatSbConn({required this.contactEmail});
+
+  final String contactEmail;
+  Socket? socket;
+  final List<int> rxBuffer = <int>[];
+  _PendingFrame? pendingFrame;
+  bool ready = false;
+  bool connecting = false;
+  int _trId = 0;
+
+  /// True when we answered an incoming RNG (ANS); false when we initiated (USR).
+  bool isInviteMode = false;
+
+  /// Outbound message queue — drained once the SB becomes ready.
+  final List<_PendingOutboundMessage> outboundQueue =
+      <_PendingOutboundMessage>[];
+
+  /// Tracks MSG flag 'A' messages awaiting ACK/NAK.  Key = SB transaction ID.
+  final Map<int, String> pendingAcks = <int, String>{};
+
+  /// Remote participants currently in this SB session (emails, normalised).
+  final Set<String> participants = <String>{};
+
+  /// SB server auth credentials (set before connect, cleared on destroy).
+  String? sessionId;
+  String? authToken;
+  String? host;
+  int? port;
+
+  /// Timer: 6 s waiting for peer to JOI after CAL.
+  Timer? joinTimeout;
+
+  /// Watchdog: fires if we sent texts but received nothing from SB server.
+  Timer? sendWatchdog;
+
+  /// Counter of text/nudge messages sent since last server activity.
+  int unackedTextSinceRx = 0;
+
+  /// Email of peer whose P2P INVITE we are waiting on (locks this SB for P2P).
+  String? p2pInFlightEmail;
+
+  /// 15 s timeout waiting for P2P 200-OK response.
+  Timer? p2pResponseTimeout;
+
+  /// Timestamp of last send/receive activity — used for idle eviction.
+  DateTime lastActivity = DateTime.now();
+
+  int nextTrId() => ++_trId;
+
+  void send(String command) {
+    try {
+      socket?.add(utf8.encode(command));
+    } catch (_) {}
+  }
+
+  int sendMsgPayload(List<int> payloadBytes, {String msgFlag = 'D'}) {
+    final trId = nextTrId();
+    final cmd = 'MSG $trId $msgFlag ${payloadBytes.length}\r\n';
+    try {
+      socket?.add(utf8.encode(cmd));
+      socket?.add(payloadBytes);
+    } catch (_) {}
+    return trId;
+  }
+
+  void destroy() {
+    joinTimeout?.cancel();
+    joinTimeout = null;
+    sendWatchdog?.cancel();
+    sendWatchdog = null;
+    p2pResponseTimeout?.cancel();
+    p2pResponseTimeout = null;
+    try {
+      socket?.destroy();
+    } catch (_) {}
+    socket = null;
+    rxBuffer.clear();
+    pendingFrame = null;
+    ready = false;
+    connecting = false;
+    isInviteMode = false;
+    outboundQueue.clear();
+    pendingAcks.clear();
+    participants.clear();
+    sessionId = null;
+    authToken = null;
+    host = null;
+    port = null;
+    p2pInFlightEmail = null;
+    unackedTextSinceRx = 0;
   }
 }

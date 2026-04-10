@@ -204,8 +204,9 @@ class ChatNotifier extends Notifier<List<Message>> {
     // ── Switchboard join / leave (group sessions) ───────────────────────
     if (event.type == MsnpEventType.system && event.command == 'SBJOIN') {
       final client = ref.read(msnpClientProvider);
-      if (client.isGroupSession) {
-        final participants = client.sbParticipants;
+      final sbKey = (event.to ?? event.from!).toLowerCase();
+      if (client.isGroupSession(sbKey)) {
+        final participants = client.sbParticipants(sbKey);
         ref.read(groupConversationsProvider.notifier).addOrUpdate(participants);
         final convId = GroupConversation.buildId(participants);
         _appendMessage(
@@ -222,8 +223,9 @@ class ChatNotifier extends Notifier<List<Message>> {
     }
     if (event.type == MsnpEventType.system && event.command == 'SBLEAVE') {
       final client = ref.read(msnpClientProvider);
+      final sbKey = (event.to ?? event.from!).toLowerCase();
       // Build convId from the participants that WERE in the session (including the one who left).
-      final remaining = client.sbParticipants;
+      final remaining = client.sbParticipants(sbKey);
       final allParticipants = {...remaining, event.from!.toLowerCase()};
       final convId = GroupConversation.buildId(allParticipants);
       _appendMessage(
@@ -233,6 +235,36 @@ class ChatNotifier extends Notifier<List<Message>> {
           body: '${event.from} left the conversation',
           timestamp: DateTime.now(),
           conversationId: convId,
+        ),
+      );
+      return;
+    }
+
+    // ── NAK — server explicitly rejected a message ──────────────────
+    if (event.type == MsnpEventType.system && event.command == 'MSGNAK') {
+      final contact = event.from ?? '';
+      _appendMessage(
+        Message(
+          from: 'system',
+          to: contact,
+          body: 'A message could not be delivered. Please try sending again.',
+          timestamp: DateTime.now(),
+        ),
+      );
+      return;
+    }
+
+    // ── Stale SB detected — recent messages may not have been delivered ──
+    if (event.type == MsnpEventType.system && event.command == 'SBSTALE') {
+      final contact = event.from ?? '';
+      _appendMessage(
+        Message(
+          from: 'system',
+          to: contact,
+          body:
+              'Your recent messages may not have been delivered. '
+              'Please try sending again.',
+          timestamp: DateTime.now(),
         ),
       );
       return;
@@ -332,9 +364,13 @@ class ChatNotifier extends Notifier<List<Message>> {
         await _soundService.playNewMessage();
       }
       final client = ref.read(msnpClientProvider);
+      // Determine SB key: for group sessions the raw field carries 'sbKey:<email>'.
+      final sbKey = (event.raw != null && event.raw!.startsWith('sbKey:'))
+          ? event.raw!.substring(6)
+          : incoming;
       String? conversationId;
-      if (client.isGroupSession) {
-        final participants = client.sbParticipants;
+      if (client.isGroupSession(sbKey)) {
+        final participants = client.sbParticipants(sbKey);
         conversationId = GroupConversation.buildId(participants);
         ref.read(groupConversationsProvider.notifier).addOrUpdate(participants);
       }
@@ -467,8 +503,8 @@ class ChatNotifier extends Notifier<List<Message>> {
     // In a group session, auto-detect conversationId if not explicitly given.
     final effectiveConvId =
         conversationId ??
-        (client.isGroupSession
-            ? GroupConversation.buildId(client.sbParticipants)
+        (client.isGroupSession(to)
+            ? GroupConversation.buildId(client.sbParticipants(to))
             : null);
     _appendMessage(
       Message(

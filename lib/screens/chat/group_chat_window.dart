@@ -147,7 +147,8 @@ class _GroupChatWindowScreenState extends ConsumerState<GroupChatWindowScreen>
 
   void _checkAutoRevert() {
     final client = ref.read(msnpClientProvider);
-    final participants = client.sbParticipants;
+    final sbKey = client.sbKeyForGroup(widget.group.participants);
+    final participants = sbKey != null ? client.sbParticipants(sbKey) : <String>{};
     // If there's only 1 remote participant left, the group has ended.
     if (participants.length <= 1 && participants.isNotEmpty) {
       final remainingEmail = participants.first;
@@ -260,8 +261,9 @@ class _GroupChatWindowScreenState extends ConsumerState<GroupChatWindowScreen>
     // Resolve current participants from the live SB session if available,
     // fall back to the group model's participant list.
     final client = ref.watch(msnpClientProvider);
-    final liveParticipants = client.isGroupSession
-        ? client.sbParticipants
+    final sbKey = client.sbKeyForGroup(widget.group.participants);
+    final liveParticipants = (sbKey != null && client.isGroupSession(sbKey))
+        ? client.sbParticipants(sbKey)
         : widget.group.participants;
 
     // Build the display label
@@ -607,7 +609,11 @@ class _GroupChatWindowScreenState extends ConsumerState<GroupChatWindowScreen>
           // Leave button — group-only action
           GestureDetector(
             onTap: () async {
-              await ref.read(msnpClientProvider).leaveSwitchboard();
+              final client = ref.read(msnpClientProvider);
+              final sbKey = client.sbKeyForGroup(widget.group.participants);
+              if (sbKey != null) {
+                await client.leaveSwitchboard(sbKey);
+              }
               if (mounted) Navigator.of(context).pop();
             },
             child: Padding(
